@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="HomeAssistant.Desktop.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.Resources>
+            <Style x:Key="TitleBarButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="CornerRadius" Value="4" />
+                <Setter Property="Width" Value="36" />
+                <Setter Property="Height" Value="28" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="FontSize" Value="13" />
+            </Style>
+        </Grid.Resources>
+
+        <Grid.RowDefinitions>
+            <RowDefinition x:Name="TitleBarRow" Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Custom title bar. The drag region is a separate element so the buttons stay clickable. -->
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="36">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Border x:Name="DragRegion" Grid.Column="0" Background="Transparent">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0" Spacing="10">
+                    <Image x:Name="TitleBarIcon" Width="16" Height="16" />
+                    <TextBlock x:Name="TitleBarText"
+                               Text="Home Assistant"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Border>
+
+            <StackPanel x:Name="TitleBarCommands"
+                        Grid.Column="1"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center"
+                        Spacing="2"
+                        Padding="0,0,8,0">
+                <Button x:Name="BackButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Back"
+                        ToolTipService.ToolTip="Back" Click="OnBackClick" IsEnabled="False">
+                    <FontIcon Glyph="&#xE72B;" FontSize="13" />
+                </Button>
+                <Button x:Name="HomeButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Home"
+                        ToolTipService.ToolTip="Home" Click="OnHomeClick">
+                    <FontIcon Glyph="&#xE80F;" FontSize="13" />
+                </Button>
+                <Button x:Name="ReloadButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Reload"
+                        ToolTipService.ToolTip="Reload (F5)" Click="OnReloadClick">
+                    <FontIcon Glyph="&#xE72C;" FontSize="13" />
+                </Button>
+                <Button x:Name="PinButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Always on top"
+                        ToolTipService.ToolTip="Always on top" Click="OnPinClick">
+                    <FontIcon x:Name="PinIcon" Glyph="&#xE718;" FontSize="13" />
+                </Button>
+                <Button x:Name="SettingsButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Settings"
+                        ToolTipService.ToolTip="Settings" Click="OnSettingsClick">
+                    <FontIcon Glyph="&#xE713;" FontSize="13" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1">
+            <!-- The WebView2 is created in code so it can be replaced wholesale if the
+                 browser process dies, and so the isolated environment is applied first. -->
+            <Grid x:Name="WebViewHost" />
+
+            <!-- Shown while connecting and whenever navigation or the browser process fails. -->
+            <Grid x:Name="StatusOverlay"
+                  Visibility="Collapsed"
+                  Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16" MaxWidth="460">
+                    <ProgressRing x:Name="StatusProgress" IsActive="True" Width="40" Height="40"
+                                  HorizontalAlignment="Center" />
+                    <TextBlock x:Name="StatusTitle"
+                               Text="Connecting&#x2026;"
+                               HorizontalAlignment="Center"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Name="StatusDetail"
+                               HorizontalAlignment="Center"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Style="{StaticResource BodyTextBlockStyle}" />
+                    <StackPanel x:Name="StatusActions"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Center"
+                                Spacing="8"
+                                Visibility="Collapsed">
+                        <Button Content="Retry now" Click="OnRetryClick" Style="{StaticResource AccentButtonStyle}" />
+                        <Button Content="Settings" Click="OnSettingsClick" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

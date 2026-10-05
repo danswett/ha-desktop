@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Platforms>x64</Platforms>
+
+    <RootNamespace>HomeAssistant.Desktop</RootNamespace>
+    <AssemblyName>HomeAssistant.Desktop</AssemblyName>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+
+    <UseWinUI>true</UseWinUI>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Program.cs owns Main so that single-instance redirection can run before XAML starts. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+
+    <!-- Plain .exe, no MSIX identity, and no machine-wide runtime prerequisites. -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <EnableMsixTooling>false</EnableMsixTooling>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\app.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
+    Publishing an unpackaged WinUI app drops the project's own .pri, which is where the
+    compiled XAML lives. The build produces it and `dotnet build` output works, but the
+    published copy fails at startup with:
+        Cannot locate resource from 'ms-appx:///MainWindow.xaml'
+    Put it back into the publish set explicitly.
+  -->
+  <Target Name="AddProjectPriToPublish" AfterTargets="ComputeFilesToPublish">
+    <PropertyGroup>
+      <_ProjectPriPath Condition="'$(ProjectPriFullPath)' != ''">$(ProjectPriFullPath)</_ProjectPriPath>
+      <_ProjectPriPath Condition="'$(_ProjectPriPath)' == ''">$(OutDir)$(TargetName).pri</_ProjectPriPath>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('$(_ProjectPriPath)')"
+           Text="Expected the generated resource index at $(_ProjectPriPath) but it was not there. Publishing without it produces an app that cannot load its XAML." />
+
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(_ProjectPriPath)">
+        <RelativePath>$(TargetName).pri</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+</Project>
