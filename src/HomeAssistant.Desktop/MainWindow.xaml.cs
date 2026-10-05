@@ -76,6 +76,8 @@ public sealed partial class MainWindow : Window
     private TrayIcon? _tray;
     private WindowVisibilityWatcher? _visibilityWatcher;
     private SystemStateWatcher? _systemWatcher;
+    private ToastService? _toasts;
+    private HaPushClient? _pushClient;
 
     // Two independent reasons to stop painting. Rendering requires both.
     private bool _windowVisible = true;
@@ -354,6 +356,117 @@ public sealed partial class MainWindow : Window
         await core.AddScriptToExecuteOnDocumentCreatedAsync(HostKeyScript);
 
         Navigate(_settings.HomeUrl);
+        StartPushNotifications();
+    }
+
+    /// <summary>
+    /// Opens the Home Assistant push channel once the dashboard exists to borrow a token
+    /// from. Started after navigation rather than before, because the token only appears
+    /// in the page's storage once it has signed in.
+    /// </summary>
+    private void StartPushNotifications()
+    {
+        Log.Info("push", "starting push notifications");
+
+        if (_pushClient is not null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_settings.PushWebhookId))
+        {
+            Log.Info("push", "no webhook id in settings; run tools/Register-TickerTarget.ps1 to enable toasts");
+            return;
+        }
+
+        _toasts = new ToastService(GetAccessTokenAsync, () => _settings.HomeUrl, NavigateToPath);
+        if (!_toasts.TryInitialize())
+        {
+            _toasts = null;
+            return;
+        }
+
+        _pushClient = new HaPushClient(GetAccessTokenAsync, () => _settings.HomeUrl, () => _settings.PushWebhookId);
+        _pushClient.ConnectionChanged += (connected, error) =>
+        {
+            if (connected)
+            {
+                Log.Info("push", "push channel open");
+            }
+            else
+            {
+                Log.Warn("push", $"push channel closed: {error ?? "no reason given"}");
+            }
+        };
+        _pushClient.NotificationReceived += payload =>
+        {
+            if (_toasts is { } toasts)
+            {
+                _ = toasts.HandleAsync(payload);
+            }
+        };
+        _pushClient.Start();
+    }
+
+    /// <summary>
+    /// Borrows the dashboard's own access token out of the page's storage, so the app
+    /// needs no credential of its own. Home Assistant rotates this token, so it is read
+    /// fresh on every use rather than cached.
+    /// </summary>
+    private Task<string?> GetAccessTokenAsync(CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        if (!DispatcherQueue.TryEnqueue(async void () =>
+        {
+            try
+            {
+                if (_webView?.CoreWebView2 is not { } core)
+                {
+                    completion.TrySetResult(null);
+                    return;
+                }
+
+                var raw = await core.ExecuteScriptAsync("window.localStorage.getItem('hassTokens')");
+
+                // ExecuteScriptAsync returns the result JSON-encoded, so a stored string
+                // arrives as a JSON string whose content is itself JSON.
+                var inner = JsonSerializer.Deserialize<string>(raw);
+                if (string.IsNullOrEmpty(inner))
+                {
+                    completion.TrySetResult(null);
+                    return;
+                }
+
+                using var document = JsonDocument.Parse(inner);
+                completion.TrySetResult(
+                    document.RootElement.TryGetProperty("access_token", out var value)
+                        ? value.GetString()
+                        : null);
+            }
+            catch (Exception)
+            {
+                completion.TrySetResult(null);
+            }
+        }))
+        {
+            completion.TrySetResult(null);
+        }
+
+        return completion.Task.WaitAsync(cancellationToken);
+    }
+
+    private void NavigateToPath(string path)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            ShowAndFocus();
+
+            if (Uri.TryCreate(new Uri(_settings.HomeUrl), path, out var target))
+            {
+                Navigate(target.ToString());
+            }
+        });
     }
 
     private void ConfigureCoreWebView(CoreWebView2 core)
@@ -660,6 +773,10 @@ public sealed partial class MainWindow : Window
         _visibilityWatcher = null;
         _systemWatcher?.Dispose();
         _systemWatcher = null;
+        _ = _pushClient?.DisposeAsync().AsTask();
+        _pushClient = null;
+        _toasts?.Dispose();
+        _toasts = null;
         DisposeWebView();
         _tray?.Dispose();
         _tray = null;

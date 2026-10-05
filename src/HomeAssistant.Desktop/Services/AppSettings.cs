@@ -38,6 +38,13 @@ public sealed class AppSettings
 
     public bool DevToolsEnabled { get; set; }
 
+    /// <summary>
+    /// Written by tools/Register-TickerTarget.ps1. Identifies this machine's mobile_app
+    /// registration so the push channel can be opened. Not a credential on its own - the
+    /// channel also requires an authenticated websocket.
+    /// </summary>
+    public string? PushWebhookId { get; set; }
+
     public WindowPlacementState? Placement { get; set; }
 
     // ---- persistence -------------------------------------------------------

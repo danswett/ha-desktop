@@ -61,6 +61,8 @@ The last one lets camera cards start streaming without a click.
 | **Always on top** | Toggle from the title bar or the tray menu |
 | **Full screen** | `F11`, and automatically when a camera card goes full screen |
 | **Stays on the dashboard** | Links that want a new window open in your real browser |
+| **Native notifications** | Home Assistant pushes over a websocket channel; action buttons report back as `mobile_app_notification_action` |
+| **Idles when it cannot be seen** | Stops rendering when fully covered, locked, asleep, or the display is off |
 
 ## Measured against the Chrome app
 
@@ -217,6 +219,81 @@ healthy it looks, so `PBT_APMRESUME*` forces a reload instead of trusting it.
 
 The test does not lock the workstation. It posts those messages to the watcher's window
 directly, which is the same code path a real lock takes without locking anyone out.
+
+## Native notifications
+
+Home Assistant pushes to this machine the same way it pushes to the family's phones, so
+the dashboard does not have to be on screen — or even running in the foreground — for a
+notification to arrive.
+
+The app registers itself with Home Assistant as a `mobile_app` device and opens a
+websocket push channel. That choice matters: the alternative, HTTP push, needs a URL
+Home Assistant can reach, which means a listening port on this machine. A websocket
+channel is outbound-only, so there is nothing to expose and nothing to firewall.
+
+```powershell
+pwsh -File tools\Register-TickerTarget.ps1
+```
+
+That registers the device, creates `device_tracker.<machine>` and
+`notify.mobile_app_<machine>`, attaches the tracker to a person so notifications
+addressed to that person reach this desktop, and stores the webhook id in the app's
+settings. The app borrows the dashboard's own access token out of the page, so it needs
+no credential of its own.
+
+Toasts carry the message, title, an optional inline image, and action buttons. Pressing
+a button raises `mobile_app_notification_action` back in Home Assistant, which is the
+same event the phones raise, so existing automations work unchanged. Clicking the body
+navigates the dashboard to `navigate_to`. A message of `clear_notification` dismisses by
+tag.
+
+Test delivery against this machine only:
+
+```powershell
+# Never use ticker.notify for a test - it fans out to everyone's phones.
+$body = @{ message = 'Test'; title = 'Home Assistant' } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "$ha/api/services/notify/mobile_app_dswett_home" `
+    -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json' -Body $body
+```
+
+`%LOCALAPPDATA%\HomeAssistantDesktop\app.log` records registration, channel state, and
+every toast. None of this has a UI, so the log is the only way to tell working from
+quietly broken.
+
+### Three ways this fails silently
+
+Each of these was hit, and none of them reports anything on its own.
+
+**The missing DLL.** Windows App SDK 2.5.1's self-contained deployment omits
+`Microsoft.WindowsAppRuntime.Insights.Resource.dll`, and no package in the dependency
+graph carries it, so it cannot simply be referenced. Nothing notices until
+`AppNotificationManager.Register()` throws `0x8007007E`, and the app loses toasts
+entirely ([WindowsAppSDK#6774](https://github.com/microsoft/WindowsAppSDK/issues/6774)).
+`tools/Copy-InsightsResource.ps1` lifts the file out of the installed runtime package at
+build time. It must match the build architecture: all architectures share a version
+number, so an unfiltered "newest" pick cheerfully drops the x86 copy beside an x64 app,
+where it will not load.
+
+**The reused message id.** Home Assistant requires every websocket message id on a
+connection to be strictly greater than the last, and silently drops any that is not.
+Sending each delivery confirmation with a hardcoded id meant only the first was ever
+processed. The second notification then went unconfirmed, and `PUSH_CONFIRM_TIMEOUT`
+(10s) made Home Assistant conclude the device was unreachable, tear the channel down,
+and fail every later send with a 500. The first notification always worked, which is
+what made it confusing.
+
+**Notifications switched off.** `AppNotificationManager.Show()` reports nothing when the
+platform discards a toast, and `AppNotification.Id` stays `0`. But when notifications are
+disabled for the *account*, the toast is accepted — a real id comes back — and still
+never appears. The one reliable signal is `ToastNotifier.Setting`, which reads
+`DisabledForUser`. The switch is Settings → System → Notifications, and it is global
+rather than anything to do with this app:
+
+```powershell
+(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications').ToastEnabled
+```
+
+`0` means no app on the machine can raise a toast.
 
 ## Requirements
 

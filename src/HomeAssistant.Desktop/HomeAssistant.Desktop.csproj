@@ -31,8 +31,12 @@
     <Version>1.0.0</Version>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <WindowsAppSdkPackageVersion>2.5.1</WindowsAppSdkPackageVersion>
+  </PropertyGroup>
+
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WindowsAppSdkPackageVersion)" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
   </ItemGroup>
 
@@ -62,6 +66,25 @@
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </ResolvedFileToPublish>
     </ItemGroup>
+  </Target>
+
+  <!--
+    Windows App SDK 2.5.1's self-contained deployment omits
+    Microsoft.WindowsAppRuntime.Insights.Resource.dll, and no package in the graph
+    carries it, so it cannot be referenced. Missing, it breaks exactly one thing:
+    AppNotificationManager.Register() throws 0x8007007E and the app loses toasts.
+    See https://github.com/microsoft/WindowsAppSDK/issues/6774 and
+    tools/Copy-InsightsResource.ps1. Run for build output and publish output alike, so
+    that running from the IDE behaves the same as the installed app.
+  -->
+  <Target Name="CopyInsightsResourceToOutput" AfterTargets="Build">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\tools\Copy-InsightsResource.ps1&quot; -TargetDirectory &quot;$(OutDir.TrimEnd('\'))&quot; -Version &quot;$(WindowsAppSdkPackageVersion)&quot; -RuntimeIdentifier &quot;$(RuntimeIdentifier)&quot;"
+          ContinueOnError="true" />
+  </Target>
+
+  <Target Name="CopyInsightsResourceToPublish" AfterTargets="Publish">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\tools\Copy-InsightsResource.ps1&quot; -TargetDirectory &quot;$(PublishDir.TrimEnd('\'))&quot; -Version &quot;$(WindowsAppSdkPackageVersion)&quot; -RuntimeIdentifier &quot;$(RuntimeIdentifier)&quot;"
+          ContinueOnError="true" />
   </Target>
 
 </Project>
