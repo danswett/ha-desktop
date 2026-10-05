@@ -60,6 +60,14 @@ internal static partial class NativeMethods
     internal const int SM_CXSMICON = 49;
     internal const int SM_CYSMICON = 50;
 
+    internal const uint GW_HWNDPREV = 3;
+
+    internal const int GWL_EXSTYLE = -20;
+    internal const int WS_EX_TRANSPARENT = 0x00000020;
+    internal const int WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
+
+    internal const int DWMWA_CLOAKED = 14;
+
     internal delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -218,6 +226,18 @@ internal static partial class NativeMethods
 
     [LibraryImport("user32.dll")]
     internal static partial uint GetDpiForWindow(IntPtr hWnd);
+
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetForegroundWindow();
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+    internal static partial IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+    [LibraryImport("dwmapi.dll")]
+    internal static partial int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out int value, int size);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

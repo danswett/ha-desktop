@@ -151,6 +151,50 @@ dashboard independent of Chrome's fate.
 But the historical stutter was largely a *server-side* problem, already fixed by the
 `ws_state_batch` component described above. This app does not take credit for that.
 
+### Not painting what you cannot see
+
+`bench/Run-Occlusion.ps1`. The largest remaining waste, and the one thing here that
+is not just "Chromium in a different box".
+
+Chromium has occlusion detection and a switch to turn it off, but **neither applies
+in this app**: WinUI hosts WebView2 in composition mode, so the browser has no
+top-level window of its own to test. Measured on a fully covered window, the page
+kept rendering at 143.6 fps and 43.8% CPU with `--disable-backgrounding-occluded-windows`
+on *and* off. The flag is a no-op here in both directions.
+
+So `WindowVisibilityWatcher` makes the call host-side — minimised, cloaked to another
+virtual desktop, or entirely covered by a window above it — and collapses the WebView2,
+which suspends rendering while leaving the page running.
+
+| state | CPU | frames | timers |
+|---|---:|---:|---:|
+| uncovered | 38.70% | 144.0 fps | 4.00/s |
+| **covered, watcher on** | **3.75%** | 0 fps | **4.00/s** |
+| covered, watcher off | 35.89% | 143.6 fps | 4.01/s |
+
+On the real dashboard the same change is **215% → 3.44% CPU**, a saving of roughly two
+cores whenever the window sits behind something. Timer fidelity is untouched, so the
+dashboard is current the instant it is uncovered.
+
+Set `RenderWhenCovered: true` in settings.json to disable this.
+
+There is a deliberate safety net: if the app is the foreground window it is never
+judged covered, whatever the geometry says. A translucent or oddly shaped window that
+happened to enclose our rectangle would otherwise freeze the dashboard while it was
+plainly on screen, and a stale dashboard is a much worse failure than a wasted frame.
+
+### Things that turned out not to be worth doing
+
+- **Reduced motion.** `--force-prefers-reduced-motion` on the real dashboard: 229.7% →
+  232.3%, i.e. nothing. Home Assistant does not drive its expensive repaints from
+  anything that honours the media query. Available as `ReduceAnimations` but off.
+- **Chasing the GPU.** `edge://gpu` reports Canvas, Compositing, Rasterization, Video
+  Decode and WebGL all hardware accelerated on the RTX 5090, with no software fallback.
+  There was nothing misconfigured to fix.
+- **The dashboard's own cost.** ~230% CPU visible, against ~45% for a trivial page in
+  the same window at the same frame rate. That gap is the content, not the host, and
+  Chrome pays it too. It is not something a wrapper can optimise away.
+
 ## Requirements
 
 - Windows 10 1903 / Windows 11

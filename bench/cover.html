@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Unique, searchable title. The harness must be able to identify the window it
+     created with certainty: an earlier version used "--app=about:blank", which
+     Chrome refuses, so it opened an ordinary tab instead and the fallback
+     "last visible window" then maximised one of the user's own windows. -->
+<title>HA-BENCH-COVER</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #101014; color: #666;
+               font: 14px/1.6 Segoe UI, sans-serif;
+               display: flex; align-items: center; justify-content: center; }
+  div { text-align: center; }
+  b { color: #4fc3f7; }
+</style>
+</head>
+<body>
+<div>
+  <b>HA-BENCH-COVER</b><br>
+  Benchmark fixture: this window exists only to cover the dashboard window.<br>
+  It is static and closes itself when the benchmark finishes.
+</div>
+</body>
+</html>

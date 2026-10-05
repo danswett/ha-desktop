@@ -21,6 +21,21 @@ public sealed class AppSettings
 
     public bool AlwaysOnTop { get; set; }
 
+    /// <summary>
+    /// Keep painting while the window is completely covered by another window.
+    ///
+    /// Timers keep running either way - that is what keeps the dashboard current -
+    /// so this only controls whether it also rasterises and composites pixels that
+    /// nobody can see.
+    /// </summary>
+    public bool RenderWhenCovered { get; set; }
+
+    /// <summary>
+    /// Ask the page for reduced motion. Home Assistant honours this and drops its
+    /// continuous animations, which are the bulk of a dashboard's frame cost.
+    /// </summary>
+    public bool ReduceAnimations { get; set; }
+
     public bool DevToolsEnabled { get; set; }
 
     public WindowPlacementState? Placement { get; set; }

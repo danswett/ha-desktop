@@ -17,17 +17,35 @@ namespace HomeAssistant.Desktop;
 public sealed partial class MainWindow : Window
 {
     /// <summary>
-    /// Chromium is tuned for a foreground browser tab, which is the wrong trade-off for a
-    /// dashboard that spends its life behind other windows. Without these three flags the
-    /// renderer's timers are clamped and the page quietly falls behind.
+    /// Chromium is tuned for a foreground browser tab, which is the wrong trade-off for
+    /// a dashboard that spends its life behind other windows. Without the throttling
+    /// flags the renderer's timers are clamped and the page quietly falls behind.
     /// </summary>
-    private static readonly string[] BrowserArguments =
-    [
-        "--disable-background-timer-throttling",
-        "--disable-renderer-backgrounding",
-        "--disable-backgrounding-occluded-windows",
-        "--autoplay-policy=no-user-gesture-required",
-    ];
+    private string[] BuildBrowserArguments()
+    {
+        var args = new List<string>
+        {
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            // So camera cards start streaming without needing a click.
+            "--autoplay-policy=no-user-gesture-required",
+        };
+
+        // Off by default: when the window is fully covered there is nothing to see, and
+        // compositing a 4K surface at the display refresh rate is the single largest
+        // cost this app has. Timer fidelity does not depend on it.
+        if (_settings.RenderWhenCovered)
+        {
+            args.Add("--disable-backgrounding-occluded-windows");
+        }
+
+        if (_settings.ReduceAnimations)
+        {
+            args.Add("--force-prefers-reduced-motion");
+        }
+
+        return [.. args];
+    }
 
     private const string HostKeyScript = """
         (function () {
@@ -56,6 +74,7 @@ public sealed partial class MainWindow : Window
 
     private WebView2? _webView;
     private TrayIcon? _tray;
+    private WindowVisibilityWatcher? _visibilityWatcher;
     private int _retryAttempt;
     private bool _exiting;
     private bool _suppressMinimizeToTray;
@@ -92,6 +111,29 @@ public sealed partial class MainWindow : Window
         _appWindow.Changed += OnAppWindowChanged;
         _appWindow.Closing += OnAppWindowClosing;
         Closed += OnWindowClosed;
+
+        // Chromium cannot see that a composition-hosted WebView2 is covered, so the
+        // host watches for it and stops the page painting pixels nobody can see.
+        _visibilityWatcher = new WindowVisibilityWatcher(
+            _hwnd,
+            isEnabled: () => !_settings.RenderWhenCovered,
+            interval: TimeSpan.FromSeconds(2));
+        _visibilityWatcher.VisibilityChanged += OnEffectiveVisibilityChanged;
+    }
+
+    /// <summary>
+    /// Collapsing the control suspends rendering but leaves the page running, so
+    /// timers keep firing and the dashboard is current the moment it is uncovered.
+    /// </summary>
+    private void OnEffectiveVisibilityChanged(bool visible)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_webView is not null)
+            {
+                _webView.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            }
+        });
     }
 
     // ---- start-up ----------------------------------------------------------
@@ -229,7 +271,7 @@ public sealed partial class MainWindow : Window
 
             var options = new CoreWebView2EnvironmentOptions
             {
-                AdditionalBrowserArguments = string.Join(' ', BrowserArguments),
+                AdditionalBrowserArguments = string.Join(' ', BuildBrowserArguments()),
             };
 
             // A dedicated user data folder is what makes this a wholly separate browser:
@@ -569,6 +611,8 @@ public sealed partial class MainWindow : Window
     {
         _retryTimer.Stop();
         _placementSaveTimer.Stop();
+        _visibilityWatcher?.Dispose();
+        _visibilityWatcher = null;
         DisposeWebView();
         _tray?.Dispose();
         _tray = null;
