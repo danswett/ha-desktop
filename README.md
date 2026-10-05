@@ -195,6 +195,29 @@ plainly on screen, and a stale dashboard is a much worse failure than a wasted f
   the same window at the same frame rate. That gap is the content, not the host, and
   Chrome pays it too. It is not something a wrapper can optimise away.
 
+### Locked, asleep, or display off
+
+`bench/Run-LockSleep.ps1`. The occlusion watcher cannot see any of these: a locked
+workstation runs on a separate desktop, so our window is neither covered nor hidden by
+anything it can enumerate, and it would keep compositing at the display refresh rate
+to an audience of nobody.
+
+`SystemStateWatcher` takes `WM_WTSSESSION_CHANGE` and `WM_POWERBROADCAST` on a
+message-only window, covering session lock/unlock, monitor power, and sleep/resume.
+
+| state | CPU | frames | timers |
+|---|---:|---:|---:|
+| unlocked | 42.64% | 144 fps | 4.03/s |
+| **session locked** | **4.17%** | 0 fps | **4.00/s** |
+| unlocked again | 37.17% | 144 fps | 4.00/s |
+
+Sleep is a correctness problem rather than a cost one, so resume is handled separately:
+the network went away with the machine, and the page's websocket is stale however
+healthy it looks, so `PBT_APMRESUME*` forces a reload instead of trusting it.
+
+The test does not lock the workstation. It posts those messages to the watcher's window
+directly, which is the same code path a real lock takes without locking anyone out.
+
 ## Requirements
 
 - Windows 10 1903 / Windows 11

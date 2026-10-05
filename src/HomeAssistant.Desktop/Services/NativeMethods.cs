@@ -68,6 +68,33 @@ internal static partial class NativeMethods
 
     internal const int DWMWA_CLOAKED = 14;
 
+    // Session and power notifications, used to stop rendering when the screen is
+    // locked or the display is off, and to recover after the machine sleeps.
+    internal const int WM_WTSSESSION_CHANGE = 0x02B1;
+    internal const int WTS_SESSION_LOCK = 0x7;
+    internal const int WTS_SESSION_UNLOCK = 0x8;
+    internal const uint NOTIFY_FOR_THIS_SESSION = 0;
+
+    internal const int WM_POWERBROADCAST = 0x0218;
+    internal const int PBT_APMSUSPEND = 0x0004;
+    internal const int PBT_APMRESUMESUSPEND = 0x0007;
+    internal const int PBT_APMRESUMEAUTOMATIC = 0x0012;
+    internal const int PBT_POWERSETTINGCHANGE = 0x8013;
+
+    internal const uint DEVICE_NOTIFY_WINDOW_HANDLE = 0;
+
+    /// <summary>Monitor power state. Data is 0 when the display is off.</summary>
+    internal static readonly Guid GUID_CONSOLE_DISPLAY_STATE =
+        new("6fe69556-704a-47a0-8f24-c28d936fda47");
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct POWERBROADCAST_SETTING
+    {
+        public Guid PowerSetting;
+        public uint DataLength;
+        public byte Data;
+    }
+
     internal delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -238,6 +265,21 @@ internal static partial class NativeMethods
 
     [LibraryImport("dwmapi.dll")]
     internal static partial int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out int value, int size);
+
+    [LibraryImport("wtsapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool WTSRegisterSessionNotification(IntPtr hWnd, uint dwFlags);
+
+    [LibraryImport("wtsapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool WTSUnRegisterSessionNotification(IntPtr hWnd);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial IntPtr RegisterPowerSettingNotification(IntPtr hRecipient, ref Guid powerSettingGuid, uint flags);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UnregisterPowerSettingNotification(IntPtr handle);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

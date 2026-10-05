@@ -75,6 +75,11 @@ public sealed partial class MainWindow : Window
     private WebView2? _webView;
     private TrayIcon? _tray;
     private WindowVisibilityWatcher? _visibilityWatcher;
+    private SystemStateWatcher? _systemWatcher;
+
+    // Two independent reasons to stop painting. Rendering requires both.
+    private bool _windowVisible = true;
+    private bool _userPresent = true;
     private int _retryAttempt;
     private bool _exiting;
     private bool _suppressMinimizeToTray;
@@ -118,21 +123,61 @@ public sealed partial class MainWindow : Window
             _hwnd,
             isEnabled: () => !_settings.RenderWhenCovered,
             interval: TimeSpan.FromSeconds(2));
-        _visibilityWatcher.VisibilityChanged += OnEffectiveVisibilityChanged;
+        _visibilityWatcher.VisibilityChanged += OnWindowVisibilityChanged;
+
+        // A locked session or a sleeping display is invisible to the watcher above:
+        // the lock screen is a separate desktop, so our window is still "visible".
+        try
+        {
+            _systemWatcher = new SystemStateWatcher();
+            _systemWatcher.UserPresenceChanged += OnUserPresenceChanged;
+            _systemWatcher.Resumed += OnSystemResumed;
+        }
+        catch (InvalidOperationException)
+        {
+            // Losing these notifications costs efficiency, never correctness.
+        }
+    }
+
+    private void OnWindowVisibilityChanged(bool visible)
+    {
+        _windowVisible = visible;
+        UpdateRenderingState();
+    }
+
+    private void OnUserPresenceChanged(bool present)
+    {
+        _userPresent = present;
+        UpdateRenderingState();
     }
 
     /// <summary>
     /// Collapsing the control suspends rendering but leaves the page running, so
-    /// timers keep firing and the dashboard is current the moment it is uncovered.
+    /// timers keep firing and the dashboard is current the moment it is seen again.
     /// </summary>
-    private void OnEffectiveVisibilityChanged(bool visible)
+    private void UpdateRenderingState()
     {
+        var shouldRender = _windowVisible && _userPresent;
+
         DispatcherQueue.TryEnqueue(() =>
         {
             if (_webView is not null)
             {
-                _webView.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+                _webView.Visibility = shouldRender ? Visibility.Visible : Visibility.Collapsed;
             }
+        });
+    }
+
+    /// <summary>
+    /// After a sleep the network went away with the machine, so the page's websocket
+    /// is stale however healthy it looks. Reload rather than trust it.
+    /// </summary>
+    private void OnSystemResumed()
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            _retryAttempt = 0;
+            ReloadNow();
         });
     }
 
@@ -613,6 +658,8 @@ public sealed partial class MainWindow : Window
         _placementSaveTimer.Stop();
         _visibilityWatcher?.Dispose();
         _visibilityWatcher = null;
+        _systemWatcher?.Dispose();
+        _systemWatcher = null;
         DisposeWebView();
         _tray?.Dispose();
         _tray = null;
