@@ -62,6 +62,95 @@ The last one lets camera cards start streaming without a click.
 | **Full screen** | `F11`, and automatically when a camera card goes full screen |
 | **Stays on the dashboard** | Links that want a new window open in your real browser |
 
+## Measured against the Chrome app
+
+Harness in `bench/`. Everything is read from outside the processes under test —
+window titles and OS process counters — so both hosts are measured by the same
+method with nothing instrumented or attached. Whole process trees are counted, not
+just the window owner. Measured on DSWETT-HOME, 4K at 144Hz.
+
+### Timer fidelity while hidden — the one that matters for a tray app
+
+`bench/Run-Throttling.ps1`. The same page runs a 250ms interval (4 ticks/s) in each
+host; all are hidden for 120s and sampled throughout.
+
+| host | visible | hidden | retained | ticks lost |
+|---|---:|---:|---:|---:|
+| Chrome app window, your Chrome | 4.02/s | 0.80/s | 20% | 384 |
+| Chrome app window, isolated Chrome | 4.00/s | 0.80/s | 20% | 384 |
+| **this app** | 4.05/s | **4.00/s** | **100%** | **0** |
+
+Chrome drops to exactly 1.00/s on hiding, then to 0.73/s as intensive throttling
+engages. Both Chrome variants behave identically, so this is Chromium policy, not
+contention. The app loses nothing, which is the whole reason for the three
+`--disable-*-throttling`/`backgrounding` flags.
+
+### Cost of the same work
+
+`bench/Run-EngineOverhead.ps1`. Identical local page, identical window size, warm
+profiles, each host measured alone with its window in the foreground. Both rendered
+at the same rate, so this compares like with like.
+
+| host | CPU | memory | processes | fps |
+|---|---:|---:|---:|---:|
+| **this app** | **39.6%** | **532 MB** | 7 | 143.7 |
+| Chrome, isolated | 56.1% | 769 MB | 16 | 143.7 |
+
+About 30% less CPU and 30% less memory for the same frames.
+
+### Idle in the tray
+
+`bench/Run-CpuBreakdown.ps1`. This is where an always-on app actually lives.
+
+| state | CPU | note |
+|---|---:|---|
+| visible, dashboard | 213% | renderer 113% + GPU 98%, rendering at 144Hz |
+| **parked in the tray** | **3.95%** | 98% drop; renderer working set 757 → 300 MB |
+
+Worth being precise about why this is not a contradiction with the section above:
+disabling background throttling keeps **timers** at full rate, but frame callbacks
+and compositing still stop when the window is genuinely not on screen. The app stays
+current without repainting something nobody is looking at.
+
+### Measurements that did not show a difference
+
+Stated because they were run, not because they help. `bench/Run-Contention.ps1`
+loaded three GPU-heavy windows inside Chrome and measured frame health in all three
+hosts: nothing degraded, in any host. On this hardware browser load was not enough
+to starve the compositor, so the shared-GPU-process argument below is structural,
+not something this benchmark demonstrated.
+
+### Measurement traps hit along the way
+
+Each of these produced a confident, wrong number first:
+
+- **The two hosts restore different dashboards.** Each profile reopens whatever view
+  it last had, so one was rendering a live-updating list and the other a static view.
+  A first pass read 210% vs 35% and was pure artefact. Pin an explicit URL and assert
+  the two window titles match before believing anything.
+- **Chrome reuses an existing renderer** for a site it already has open, so
+  identifying "the dashboard's renderer" by diffing renderer PIDs finds a spare
+  process at 0.07% CPU instead of the real one.
+- **A covered window stops working in Chrome but not in this app**, by design. Any
+  visible-state comparison has to have each window genuinely in the foreground, which
+  in practice means measuring the hosts sequentially rather than side by side.
+- **A cold Chrome profile renders well below the display rate** while it builds its
+  shader cache — 51.8 fps against 143.7 — which makes its CPU look far better than it
+  is. Warm the profile first.
+- **`Win32_Process` reports PIDs as `UInt32`.** A `UInt32` key does not match an
+  `Int32` lookup in a .NET hashtable, so a process-tree walk silently returns only the
+  root and every "tree" total is really just one process.
+
+### What this does not claim
+
+The structural isolation is real and verifiable — separate browser, GPU, network and
+renderer processes, separate profile, confirmed by process tree. Your Chrome serves
+every window it owns from **one** GPU process; this app has its own. That makes the
+dashboard independent of Chrome's fate.
+
+But the historical stutter was largely a *server-side* problem, already fixed by the
+`ws_state_batch` component described above. This app does not take credit for that.
+
 ## Requirements
 
 - Windows 10 1903 / Windows 11

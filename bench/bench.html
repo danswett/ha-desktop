@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BENCH init</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd;
+               font: 13px/1.5 Consolas, monospace; }
+  #wrap { padding: 12px; }
+  h1 { font-size: 15px; margin: 0 0 8px; color: #4fc3f7; }
+  td { padding: 1px 10px 1px 0; }
+  .n { color: #fff; font-weight: bold; }
+  #spin { width: 60px; height: 60px; margin: 10px 0;
+          background: linear-gradient(45deg, #4fc3f7, #0277bd);
+          animation: spin 1.2s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1 id="who">BENCH</h1>
+  <div id="spin"></div>
+  <table>
+    <tr><td>elapsed</td><td class="n" id="e">0</td></tr>
+    <tr><td>rAF frames</td><td class="n" id="f">0</td></tr>
+    <tr><td>frames &gt;50ms</td><td class="n" id="j50">0</td></tr>
+    <tr><td>frames &gt;250ms</td><td class="n" id="j250">0</td></tr>
+    <tr><td>timer ticks (250ms)</td><td class="n" id="t">0</td></tr>
+    <tr><td>ticks &gt;100ms late</td><td class="n" id="dl">0</td></tr>
+  </table>
+</div>
+<script>
+// Every published value is a monotonically increasing counter, never a maximum,
+// so the harness can subtract two readings and get a figure for that interval
+// alone. An all-time maximum would stay permanently contaminated by the stall
+// that happens while the window is being created and positioned.
+const id = new URLSearchParams(location.search).get('id') || 'X';
+document.getElementById('who').textContent = 'BENCH ' + id;
+
+const TICK_MS = 250;
+const start = performance.now();
+
+let frames = 0, j50 = 0, j250 = 0;
+let ticks = 0, lateTicks = 0;
+let lastFrame = start, lastTick = start;
+
+function publish() {
+  const e = (performance.now() - start) / 1000;
+  document.title = 'BENCH ' + id + ' f=' + frames + ' j50=' + j50 + ' j250=' + j250
+                 + ' t=' + ticks + ' dl=' + lateTicks + ' e=' + e.toFixed(1);
+  document.getElementById('e').textContent = e.toFixed(1) + ' s';
+  document.getElementById('f').textContent = frames;
+  document.getElementById('j50').textContent = j50;
+  document.getElementById('j250').textContent = j250;
+  document.getElementById('t').textContent = ticks;
+  document.getElementById('dl').textContent = lateTicks;
+}
+
+function onFrame(now) {
+  const gap = now - lastFrame;
+  lastFrame = now;
+  frames++;
+  if (gap > 50) { j50++; }
+  if (gap > 250) { j250++; }
+  if (frames % 15 === 0) { publish(); }
+  requestAnimationFrame(onFrame);
+}
+
+setInterval(function () {
+  const now = performance.now();
+  const drift = (now - lastTick) - TICK_MS;
+  lastTick = now;
+  ticks++;
+  if (drift > 100) { lateTicks++; }
+  // Published from the timer as well as from the frame callback, so a host whose
+  // frame callbacks are suspended still reports its timer totals.
+  publish();
+}, TICK_MS);
+
+requestAnimationFrame(onFrame);
+publish();
+</script>
+</body>
+</html>

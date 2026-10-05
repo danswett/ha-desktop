@@ -412,6 +412,10 @@ public sealed partial class MainWindow : Window
     {
         _documentTitle = string.IsNullOrWhiteSpace(sender.DocumentTitle) ? "Home Assistant" : sender.DocumentTitle;
         TitleBarText.Text = _documentTitle;
+
+        // Also the OS window title, so Alt+Tab and the taskbar show the current view.
+        Title = _documentTitle;
+
         _tray?.UpdateTooltip(_documentTitle);
     }
 

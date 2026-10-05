@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>LOAD</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  /* Blurred, animated layers are deliberately expensive for the compositor,
+     which in Chrome is a process shared by every window in the browser. */
+  .blob { position: absolute; width: 420px; height: 420px; border-radius: 50%;
+          filter: blur(42px); mix-blend-mode: screen; will-change: transform; }
+  .b1 { background: #ff0066; animation: m1 2.6s ease-in-out infinite alternate; }
+  .b2 { background: #00ccff; animation: m2 3.1s ease-in-out infinite alternate; }
+  .b3 { background: #ffcc00; animation: m3 2.2s ease-in-out infinite alternate; }
+  @keyframes m1 { from { transform: translate(0,0) scale(1); }
+                  to   { transform: translate(60vw,40vh) scale(1.6); } }
+  @keyframes m2 { from { transform: translate(70vw,10vh) scale(1.4); }
+                  to   { transform: translate(5vw,55vh) scale(0.8); } }
+  @keyframes m3 { from { transform: translate(30vw,60vh) scale(1.2); }
+                  to   { transform: translate(65vw,5vh) scale(1.7); } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="blob b1"></div>
+<div class="blob b2"></div>
+<div class="blob b3"></div>
+<script>
+// Saturates the renderer's raster work and the shared GPU process.
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+
+function size() { c.width = innerWidth; c.height = innerHeight; }
+size();
+addEventListener('resize', size);
+
+let t = 0;
+function draw() {
+  t += 0.02;
+  const w = c.width, h = c.height;
+  ctx.clearRect(0, 0, w, h);
+  for (let i = 0; i < 900; i++) {
+    const x = (Math.sin(t + i * 0.11) * 0.5 + 0.5) * w;
+    const y = (Math.cos(t + i * 0.07) * 0.5 + 0.5) * h;
+    const r = 14 + 26 * Math.abs(Math.sin(t + i));
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `hsla(${(i * 7 + t * 60) % 360},90%,60%,0.85)`);
+    g.addColorStop(1, 'hsla(0,0%,0%,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 6.283);
+    ctx.fill();
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
