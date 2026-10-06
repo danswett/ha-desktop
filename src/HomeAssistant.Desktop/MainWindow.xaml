@@ -96,6 +96,33 @@
                     </StackPanel>
                 </StackPanel>
             </Grid>
+
+            <!-- Sits above the status overlay as well: while locked, nothing about the
+                 dashboard - not even whether it connected - should be on screen. -->
+            <Grid x:Name="LockOverlay"
+                  Visibility="Collapsed"
+                  Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16" MaxWidth="420">
+                    <FontIcon Glyph="&#xE72E;" FontSize="38" HorizontalAlignment="Center" />
+                    <TextBlock Text="Locked"
+                               HorizontalAlignment="Center"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Name="LockDetail"
+                               Text="Verify with Windows Hello to show your dashboard."
+                               HorizontalAlignment="Center"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Style="{StaticResource BodyTextBlockStyle}" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
+                        <Button x:Name="UnlockButton"
+                                Content="Unlock"
+                                Click="OnUnlockClick"
+                                Style="{StaticResource AccentButtonStyle}" />
+                        <Button Content="Exit" Click="OnLockExitClick" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
         </Grid>
     </Grid>
 </Window>

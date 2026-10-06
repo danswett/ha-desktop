@@ -495,14 +495,36 @@ deleting that one folder resets the app completely.
 
 ### Dashboard address
 
-Defaults to `http://192.168.1.188:8123`.
+Two addresses: the one on your own network, and an optional one that works from
+anywhere. The local address is used whenever it answers, and the external one only
+when it does not, so a laptop keeps working when it leaves the house. **Fill in from
+Home Assistant** reads both out of Home Assistant's own configuration.
 
-**Use the LAN address, not the public tunnel.** Home Assistant is configured with
-`use_x_forwarded_for`, so a LAN client that goes out through Cloudflare and back in is
+There is no built-in default. A machine that has not been told where Home Assistant
+lives says so, rather than quietly failing to reach somebody else's.
+
+**Prefer the LAN address.** Home Assistant is typically configured with
+`use_x_forwarded_for`, so a LAN client that goes out through a tunnel and back in is
 attributed to the WAN address. Ten failed logins from there and Home Assistant bans that
 address — permanently, for every client on the tunnel, including your browser. A ban
 answers every HTTP request with `403`, which reads exactly like a revoked token. The
 dialog carries a short version of this warning.
+
+### Require Windows Hello
+
+Off by default. When on, the app shows a lock screen at launch and asks for Windows
+Hello before revealing the dashboard. The browser still starts underneath, so
+notifications and the unread count keep working while locked — holding those back
+would make a locked app useless rather than private.
+
+This is a screen lock, not a vault. The refresh token is protected with DPAPI, which
+is bound to your Windows account, so anything already running as you can read it with
+or without this. What it covers is the case it describes: an unattended, unlocked
+machine with your house on screen.
+
+The setting can only be switched on after a successful verification, so turning on a
+lock cannot be the thing that locks you out. If Hello is later removed from the
+machine, the app opens unlocked and says so in the log rather than stranding you.
 
 ## Keyboard
 
