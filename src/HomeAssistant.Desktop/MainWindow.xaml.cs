@@ -83,6 +83,7 @@ public sealed partial class MainWindow : Window
     private readonly ProtectedStore _secrets = new();
     private HaAuth? _auth;
     private HaEndpoints? _endpoints;
+    private ExternalAppBridge? _bridge;
     private string? _credentialSource;
     private CoreWebView2Environment? _webViewEnvironment;
     private bool _signInInProgress;
@@ -751,6 +752,62 @@ public sealed partial class MainWindow : Window
         core.DocumentTitleChanged += OnDocumentTitleChanged;
         core.ContainsFullScreenElementChanged += OnContainsFullScreenElementChanged;
         core.WebMessageReceived += OnWebMessageReceived;
+
+        InstallExternalAppBridge(core);
+    }
+
+    /// <summary>
+    /// Attaches Home Assistant's external app bridge, but only when the app actually
+    /// holds credentials of its own.
+    ///
+    /// The bridge is all-or-nothing from the page's point of view: once
+    /// window.externalApp exists, the frontend stops using its own stored tokens
+    /// entirely and asks the host for every one. Installing it without a sign-in to
+    /// back it would therefore replace a dashboard that logs itself in with one that
+    /// cannot log in at all.
+    /// </summary>
+    private void InstallExternalAppBridge(CoreWebView2 core)
+    {
+        if (_auth is not { IsSignedIn: true } auth)
+        {
+            Log.Info("bridge", "not signed in; leaving the dashboard to its own session");
+            return;
+        }
+
+        _bridge = new ExternalAppBridge(
+            tokenProvider: auth.GetAccessTokenWithLifetimeAsync,
+            revoke: auth.SignOutAsync,
+            showSettings: () => DispatcherQueue.TryEnqueue(() => _ = ShowSettingsDialogAsync()),
+            runScript: async script =>
+            {
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!DispatcherQueue.TryEnqueue(async void () =>
+                {
+                    try
+                    {
+                        if (_webView?.CoreWebView2 is { } live)
+                        {
+                            await live.ExecuteScriptAsync(script);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("bridge", $"could not run a bridge reply: {ex.Message}");
+                    }
+                    finally
+                    {
+                        completion.TrySetResult();
+                    }
+                }))
+                {
+                    completion.TrySetResult();
+                }
+
+                await completion.Task;
+            });
+
+        _ = ExternalAppBridge.InstallAsync(core);
+        Log.Info("bridge", "external app bridge attached; the app is supplying the dashboard's tokens");
     }
 
     private void Navigate(string url)
@@ -894,6 +951,11 @@ public sealed partial class MainWindow : Window
         try
         {
             using var document = JsonDocument.Parse(e.WebMessageAsJson);
+            if (_bridge?.TryHandle(document.RootElement) == true)
+            {
+                return;
+            }
+
             type = document.RootElement.TryGetProperty("type", out var value) ? value.GetString() : null;
         }
         catch (JsonException)
@@ -1046,6 +1108,7 @@ public sealed partial class MainWindow : Window
 
     private void DisposeWebView()
     {
+        _bridge = null;
         if (_webView is null)
         {
             return;
@@ -1218,13 +1281,25 @@ public sealed partial class MainWindow : Window
             button.IsEnabled = false;
             try
             {
-                if (_auth?.IsSignedIn == true)
+                var wasSignedIn = _auth?.IsSignedIn == true;
+                if (wasSignedIn)
                 {
-                    await _auth.SignOutAsync(CancellationToken.None);
+                    await _auth!.SignOutAsync(CancellationToken.None);
                 }
                 else
                 {
                     await SignInAsync();
+                }
+
+                // The external app bridge is installed with the WebView, and once the
+                // page can see it the frontend stops using its own session entirely.
+                // Signing out would otherwise leave a dashboard asking this app for
+                // tokens it no longer has, and signing in would not take effect until
+                // the next launch. Rebuilding the browser puts the two back in step.
+                if (wasSignedIn != (_auth?.IsSignedIn == true))
+                {
+                    _bridge = null;
+                    _ = RestartWebViewAsync();
                 }
             }
             finally

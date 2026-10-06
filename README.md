@@ -331,6 +331,43 @@ rather than anything to do with this app:
 
 `0` means no app on the machine can raise a toast.
 
+## The companion app bridge
+
+Signed in, the app attaches Home Assistant's external app bridge — the same one the
+Android and iOS companion apps speak. Two things follow from that.
+
+**The app owns authentication.** The frontend decides it is running inside a native
+app purely by finding `window.externalApp` on the page (`src/data/external.ts`), and
+from then on it stops loading tokens from its own storage and asks the host for one
+instead (`src/entrypoints/core.ts` chooses `createExternalAuth` over `getAuth`). That
+is what lets a laptop move between the internal and external addresses without being
+asked to log in again: those are different web origins, and the page's own session
+does not cross them. The app's token does.
+
+**Home Assistant shows a "Companion App" row** in Settings and in the sidebar. The
+frontend asks what the app can do, over the bridge, and renders accordingly:
+
+| Message | Direction | |
+|---|---|---|
+| `config/get` | frontend → app | answered with `hasSettingsScreen: true` |
+| `config_screen/show` | frontend → app | opens this app's settings dialog |
+| `getExternalAuth` | frontend → app | answered with an access token and its lifetime |
+| `revokeExternalAuth` | frontend → app | signs the app out |
+
+Two details are load-bearing:
+
+- `config/get` **must** be answered. The frontend awaits it inside
+  `createExternalAuth`, so a missing reply leaves the dashboard permanently blank
+  rather than merely missing a feature.
+- The bridge is only installed when the app actually holds credentials. Once
+  `window.externalApp` exists the frontend will not fall back to its own session, so
+  installing it without a sign-in behind it would turn a dashboard that logs itself
+  in into one that cannot log in at all. Signing in or out rebuilds the WebView so
+  the two stay in step.
+
+Only `hasSettingsScreen` is advertised. The frontend asks follow-up questions only
+about capabilities the app claims, so the list is kept honest rather than aspirational.
+
 ## Requirements
 
 - Windows 10 1903 / Windows 11
