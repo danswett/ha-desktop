@@ -16,6 +16,9 @@
   <ItemGroup>
     <Compile Include="..\..\src\HomeAssistant.Desktop\Services\LaunchRequest.cs"
              Link="Services\LaunchRequest.cs" />
+
+    <Compile Include="..\..\src\HomeAssistant.Desktop\Services\ReleaseChecker.cs"
+             Link="Services\ReleaseChecker.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -25,3 +28,5 @@
   </ItemGroup>
 
 </Project>
+
+
