@@ -80,6 +80,10 @@ public sealed partial class MainWindow : Window
     private HaPushClient? _pushClient;
     private TaskbarBadge? _badge;
     private readonly UnseenNotifications _unseen = new();
+    private readonly ProtectedStore _secrets = new();
+    private HaAuth? _auth;
+    private CoreWebView2Environment? _webViewEnvironment;
+    private bool _signInInProgress;
 
     // Two independent reasons to stop painting. Rendering requires both.
     private bool _windowVisible = true;
@@ -150,6 +154,77 @@ public sealed partial class MainWindow : Window
         catch (InvalidOperationException)
         {
             // Losing these notifications costs efficiency, never correctness.
+        }
+
+        _auth = new HaAuth(_secrets, () => _settings.HomeUrl);
+        MigrateSecretsOutOfSettings();
+    }
+
+    /// <summary>
+    /// Moves the webhook id into the encrypted store. It addresses this device to Home
+    /// Assistant, so it does not belong in a file the user is encouraged to open and
+    /// edit alongside their window preferences.
+    /// </summary>
+    private void MigrateSecretsOutOfSettings()
+    {
+        if (string.IsNullOrWhiteSpace(_settings.PushWebhookId))
+        {
+            return;
+        }
+
+        _secrets.Set(WebhookIdKey, _settings.PushWebhookId);
+        _settings.PushWebhookId = null;
+        _settings.Save();
+        Log.Info("secrets", "moved the webhook id out of settings.json");
+    }
+
+    private const string WebhookIdKey = "ha.webhook_id";
+
+    private string? WebhookId => _secrets.Get(WebhookIdKey);
+
+    /// <summary>
+    /// Signs the app in to Home Assistant in its own right, so it no longer depends on
+    /// the dashboard being signed in.
+    /// </summary>
+    private async Task SignInAsync()
+    {
+        if (_signInInProgress)
+        {
+            return;
+        }
+
+        if (_webViewEnvironment is not { } environment)
+        {
+            Log.Warn("auth", "cannot sign in before the browser engine is ready");
+            return;
+        }
+
+        _signInInProgress = true;
+        try
+        {
+            var (authorize, verifier, state) = HaAuth.BeginAuthorization(_settings.HomeUrl);
+            var window = new SignInWindow(environment, _settings.HomeUrl, authorize, state);
+            var result = await window.ShowAndWaitAsync();
+
+            if (!result.Succeeded)
+            {
+                Log.Info("auth", $"sign-in did not complete: {result.Error ?? "cancelled"}");
+                return;
+            }
+
+            await _auth!.SignInAsync(_settings.HomeUrl, result.Code!, verifier, CancellationToken.None);
+
+            // The push client caches nothing about credentials, but it may be sitting
+            // in a backoff after failing with the old ones.
+            _pushClient?.Reconnect();
+        }
+        catch (Exception ex) when (ex is HaAuthException or HttpRequestException or TaskCanceledException)
+        {
+            Log.Error("auth", "sign-in failed", ex);
+        }
+        finally
+        {
+            _signInInProgress = false;
         }
     }
 
@@ -382,6 +457,10 @@ public sealed partial class MainWindow : Window
                 browserExecutableFolder: string.Empty,
                 userDataFolder: AppSettings.WebViewUserDataFolder,
                 options: options);
+
+            // Sign-in reuses this environment so it shares the browser profile, and
+            // with it any Home Assistant session the dashboard already has.
+            _webViewEnvironment = environment;
         }
         catch (Exception ex)
         {
@@ -428,9 +507,9 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_settings.PushWebhookId))
+        if (string.IsNullOrWhiteSpace(WebhookId))
         {
-            Log.Info("push", "no webhook id in settings; run tools/Register-TickerTarget.ps1 to enable toasts");
+            Log.Info("push", "this machine is not registered with Home Assistant yet");
             return;
         }
 
@@ -455,7 +534,7 @@ public sealed partial class MainWindow : Window
         };
         _toasts.NotificationDismissed += tag => _unseen.Remove(tag);
 
-        _pushClient = new HaPushClient(GetAccessTokenAsync, () => _settings.HomeUrl, () => _settings.PushWebhookId);
+        _pushClient = new HaPushClient(GetAccessTokenAsync, () => _settings.HomeUrl, () => WebhookId);
         _pushClient.ConnectionChanged += (connected, error) =>
         {
             if (connected)
@@ -478,11 +557,40 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Borrows the dashboard's own access token out of the page's storage, so the app
-    /// needs no credential of its own. Home Assistant rotates this token, so it is read
-    /// fresh on every use rather than cached.
+    /// Supplies an access token, preferring the app's own credentials.
+    ///
+    /// Falls back to borrowing the dashboard's token out of page storage, which is how
+    /// this worked before the app could sign in for itself, and is what keeps an
+    /// install that predates OAuth working until its owner next signs in.
     /// </summary>
-    private Task<string?> GetAccessTokenAsync(CancellationToken cancellationToken)
+    private async Task<string?> GetAccessTokenAsync(CancellationToken cancellationToken)
+    {
+        if (_auth is { } auth)
+        {
+            try
+            {
+                if (await auth.GetAccessTokenAsync(cancellationToken) is { } token)
+                {
+                    return token;
+                }
+            }
+            catch (Exception ex) when (ex is HaAuthException or HttpRequestException or TaskCanceledException)
+            {
+                // Fall through and try the page: a Home Assistant that is briefly
+                // unreachable should not take the dashboard's working token with it.
+                Log.Warn("auth", $"could not refresh the access token: {ex.Message}");
+            }
+        }
+
+        return await BorrowDashboardTokenAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Borrows the dashboard's own access token out of the page's storage. Home
+    /// Assistant rotates this token, so it is read fresh on every use rather than
+    /// cached.
+    /// </summary>
+    private Task<string?> BorrowDashboardTokenAsync(CancellationToken cancellationToken)
     {
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1018,9 +1126,65 @@ public sealed partial class MainWindow : Window
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => _ = ShowSettingsDialogAsync();
 
-    private async Task ShowSettingsDialogAsync()
+    /// <summary>
+    /// Shows whether the app holds credentials of its own, and lets the user grant or
+    /// revoke them. Until it does, it borrows the dashboard's token, which works but
+    /// only for as long as the dashboard stays signed in.
+    /// </summary>
+    private StackPanel BuildAccountRow()
     {
-        if (_settingsDialogOpen)
+        var status = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.7,
+            FontSize = 12,
+            Margin = new Thickness(0, 2, 0, 0),
+        };
+
+        var button = new Button { Margin = new Thickness(0, 6, 0, 0) };
+
+        void Refresh()
+        {
+            var signedIn = _auth?.IsSignedIn == true;
+            status.Text = signedIn
+                ? "This app has its own Home Assistant credentials."
+                : "Using the dashboard's session. Sign in to give the app its own credentials, "
+                  + "so notifications keep working when the dashboard is signed out.";
+            button.Content = signedIn ? "Sign out" : "Sign in to Home Assistant";
+        }
+
+        button.Click += async (_, _) =>
+        {
+            button.IsEnabled = false;
+            try
+            {
+                if (_auth?.IsSignedIn == true)
+                {
+                    await _auth.SignOutAsync(CancellationToken.None);
+                }
+                else
+                {
+                    await SignInAsync();
+                }
+            }
+            finally
+            {
+                Refresh();
+                button.IsEnabled = true;
+            }
+        };
+
+        Refresh();
+
+        var panel = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
+        panel.Children.Add(new TextBlock { Text = "Account", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        panel.Children.Add(status);
+        panel.Children.Add(button);
+        return panel;
+    }
+
+    private async Task ShowSettingsDialogAsync()
+    {        if (_settingsDialogOpen)
         {
             return;
         }
@@ -1050,6 +1214,8 @@ public sealed partial class MainWindow : Window
             };
             openFolder.Click += (_, _) => OpenDataFolder();
 
+            var accountRow = BuildAccountRow();
+
             var panel = new StackPanel { Spacing = 0, Width = 420 };
             panel.Children.Add(urlBox);
             panel.Children.Add(new TextBlock
@@ -1067,6 +1233,7 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(alwaysOnTop.Row);
             panel.Children.Add(startWithWindows.Row);
             panel.Children.Add(devTools.Row);
+            panel.Children.Add(accountRow);
             panel.Children.Add(openFolder);
 
             var dialog = new ContentDialog
