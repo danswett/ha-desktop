@@ -30,9 +30,19 @@
       The app is meant to be running all the time, so an upgrade would otherwise hit
       files in use and ask for a reboot. Close it first instead.
     -->
+    <!--
+      The app is meant to be running all the time, so an upgrade would otherwise hit
+      files in use and ask for a reboot. Close it first instead.
+
+      It is asked with the end-session message rather than a plain close. A close is
+      what the window's own close button sends, and the app answers that by hiding to
+      the notification area without exiting - which would leave every file still locked
+      and the upgrade still blocked. Verified: the app survives WM_CLOSE.
+    -->
     <util:CloseApplication Id="CloseRunningApp"
                            Target="HomeAssistant.Desktop.exe"
-                           CloseMessage="yes"
+                           CloseMessage="no"
+                           EndSessionMessage="yes"
                            RebootPrompt="no"
                            PromptToContinue="no" />
 

@@ -93,6 +93,7 @@ public sealed partial class MainWindow : Window
     private ExternalAppBridge? _bridge;
     private WindowMessages? _windowMessages;
     private ThumbnailToolbar? _thumbBar;
+    private AppUpdater? _updater;
     private GlobalHotkey? _hotkey;
     private bool _locked;
     private string? _pendingPath;
@@ -442,6 +443,7 @@ public sealed partial class MainWindow : Window
         // One subclass, shared: see WindowMessages. It must be in place before the shell
         // announces the taskbar button.
         _windowMessages = new WindowMessages(_hwnd);
+        _windowMessages.Add(OnSystemMessage);
 
         _thumbBar = new ThumbnailToolbar(_hwnd, _windowMessages);
         _thumbBar.Invoked += slot => DispatcherQueue.TryEnqueue(() => Handle(ToRequest(slot)));
@@ -897,6 +899,17 @@ public sealed partial class MainWindow : Window
         _toasts.NotificationDismissed += tag => _unseen.Remove(tag);
 
         _pushClient = new HaPushClient(GetAccessTokenAsync, () => BaseUrl, () => WebhookId);
+
+        _updater = new AppUpdater(
+            new HaMqtt(GetAccessTokenAsync, () => BaseUrl),
+            new ReleaseChecker("danswett", "ha-desktop", () => _secrets.Get("GitHubToken")),
+            new UpdateInstaller(() => _secrets.Get("GitHubToken")),
+            () => _settings.CheckForUpdates,
+            () => DispatcherQueue.TryEnqueue(Exit));
+
+        _pushClient.MqttTopicProvider = () => _settings.CheckForUpdates ? _updater.CommandTopic : null;
+        _pushClient.MqttMessageReceived += payload => _updater?.HandleCommand(payload);
+
         _pushClient.ConnectionChanged += (connected, error) =>
         {
             if (connected)
@@ -916,6 +929,8 @@ public sealed partial class MainWindow : Window
             }
         };
         _pushClient.Start();
+
+        _updater.Start();
     }
 
     /// <summary>
@@ -1583,6 +1598,10 @@ public sealed partial class MainWindow : Window
         _systemWatcher = null;
         _endpoints?.Dispose();
         _endpoints = null;
+        _updater?.Dispose();
+
+        _updater = null;
+
         _hotkey?.Dispose();
         _hotkey = null;
 
@@ -1653,6 +1672,37 @@ public sealed partial class MainWindow : Window
 
         _settings.Placement = placement;
         _settings.Save();
+    }
+
+    /// <summary>
+    /// Treats the end of a Windows session as a genuine exit.
+    ///
+    /// Everything else that asks this window to close is answered by hiding to the
+    /// notification area, which is what the app is for. A session ending is different:
+    /// it is a shutdown, a sign-out, or an installer clearing the way for an upgrade,
+    /// and parking in the tray then keeps the executable locked. That is not
+    /// hypothetical - the MSI asks exactly this way, and the files it needs are the ones
+    /// this process is holding.
+    /// </summary>
+    private bool OnSystemMessage(uint message, IntPtr wParam, IntPtr lParam)
+    {
+        const uint WM_QUERYENDSESSION = 0x0011;
+        const uint WM_ENDSESSION = 0x0016;
+
+        if (message == WM_QUERYENDSESSION)
+        {
+            // Taken before the answer, so the close that follows is not cancelled.
+            _exiting = true;
+            return false;
+        }
+
+        if (message == WM_ENDSESSION && wParam != IntPtr.Zero)
+        {
+            _exiting = true;
+            DispatcherQueue.TryEnqueue(Exit);
+        }
+
+        return false;
     }
 
     private void Exit()
@@ -1938,6 +1988,7 @@ public sealed partial class MainWindow : Window
             var startMinimized = MakeToggleRow("Start hidden in the tray", _settings.StartMinimized);
             var alwaysOnTop = MakeToggleRow("Always on top", _settings.AlwaysOnTop);
             var startWithWindows = MakeToggleRow("Start with Windows", StartupManager.IsEnabled());
+            var checkUpdates = MakeToggleRow("Offer updates through Home Assistant", _settings.CheckForUpdates);
             var devTools = MakeToggleRow("Developer tools and context menu", _settings.DevToolsEnabled);
 
             // Verified before it can be switched on, so that turning on a lock can
@@ -2136,6 +2187,12 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(thumbSection);
 
             panel.Children.Add(SectionHeader("Advanced"));
+
+            panel.Children.Add(checkUpdates.Row);
+
+            panel.Children.Add(Hint(
+                "New releases appear in Home Assistant under Settings, Updates, alongside Home "
+                + "Assistant's own. Installing one restarts the app."));
             panel.Children.Add(requireHello.Row);
             panel.Children.Add(helloHint);
             panel.Children.Add(devTools.Row);
@@ -2180,6 +2237,7 @@ public sealed partial class MainWindow : Window
             _settings.MinimizeToTray = minimizeToTray.Toggle.IsOn;
             _settings.StartMinimized = startMinimized.Toggle.IsOn;
             _settings.DevToolsEnabled = devTools.Toggle.IsOn;
+            _settings.CheckForUpdates = checkUpdates.Toggle.IsOn;
             _settings.RequireWindowsHello = requireHello.Toggle.IsOn;
             _settings.JumpListSlots = jumpEditor.Result();
             _settings.ThumbButtons = thumbEditor.Result();
@@ -2347,6 +2405,8 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
 }
+
+
 
 
 

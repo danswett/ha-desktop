@@ -462,6 +462,53 @@ else's authorisation code. This app's own sign-in uses a different redirect enti
 The handler is registered per-user by the installer rather than by the app, so that
 uninstalling takes it away again and nothing needs elevation.
 
+## Updates
+
+The app checks GitHub for new releases and offers them **inside Home Assistant**, in
+Settings → Updates, alongside Home Assistant's own. Pressing Install downloads the
+installer, applies it and restarts the app.
+
+It does that by publishing an MQTT `update` entity describing itself. That is not a
+stylistic choice — it is the only way an outside program holding nothing but an access
+token can create a *working* update entity:
+
+| | |
+|---|---|
+| `mobile_app` | Registers sensors and binary sensors only. The webhook rejects any other type |
+| `POST /api/states/update.x` | Creates a state with no entity behind it, so the Install button calls a service that matches nothing and silently does nothing |
+| MQTT discovery | A real entity, owned by the MQTT integration, with a working `async_install` |
+
+Three details are easy to get wrong.
+
+`command_topic` is what turns the Install button on — without it the entity is a
+read-only notice, which is why an update entity can appear to work and then do nothing.
+But `payload_install` has **no default**: set the topic without it and Home Assistant
+shows the button and raises inside the integration when it is pressed. Set both or
+neither.
+
+Pressing Install publishes to that topic, so the app has to be listening. It subscribes
+over the Home Assistant websocket it already holds, using `mqtt/subscribe`, which needs
+no broker credentials — only the token the app already has. That subscription is
+**administrator-only**; publishing is not. A non-admin account still gets the entity and
+still sees new versions, and the app says so in its log rather than leaving a button
+that quietly does nothing.
+
+Installing needs one more trick. An MSI upgrade replaces the running executable, so the
+work is handed to a helper that outlives the app: it waits for the app to exit, runs the
+installer, and starts the new build. The app will not update a copy running from a build
+folder, since the installer would replace the *installed* app and the helper would then
+start that one instead.
+
+### The close that was not a close
+
+The installer asks the app to shut down with the end-session message rather than a plain
+close. A plain close is what the window's own close button sends, and this app answers
+that by hiding to the notification area — so the request was honoured, the process
+stayed, and every file it held stayed locked. Measured before the fix: the app survives
+`WM_CLOSE` with its process intact.
+
+This had never shown up because every install so far stopped the app by hand first.
+
 ## Requirements
 
 - Windows 10 1903 / Windows 11

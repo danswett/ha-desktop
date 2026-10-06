@@ -35,6 +35,13 @@ public sealed class AppSettings
     /// </summary>
     public HotkeyBinding Hotkey { get; set; } = new();
 
+    /// <summary>
+    /// Offer new releases through Home Assistant''s update screen. On by default: the
+    /// app is meant to run unattended, and a desktop app that never mentions its own
+    /// updates simply does not get them.
+    /// </summary>
+    public bool CheckForUpdates { get; set; } = true;
+
     /// <summary>Closing the window hides it to the notification area instead of exiting.</summary>
     public bool CloseToTray { get; set; } = true;
 
@@ -199,3 +206,4 @@ public sealed class WindowPlacementState
     public int Height { get; set; }
     public bool Maximized { get; set; }
 }
+

@@ -35,6 +35,18 @@ public sealed class HaPushClient : IAsyncDisposable
     /// <summary>Raised when the connection state changes, for surfacing in the UI.</summary>
     public event Action<bool, string?>? ConnectionChanged;
 
+    /// <summary>
+    /// An MQTT topic to watch alongside the push channel, or null for none.
+    ///
+    /// It shares this connection rather than opening its own because the subscription
+    /// has to be re-made every time the socket comes back, and that reconnect handling
+    /// already lives here. Read fresh on each connect so it survives being set later.
+    /// </summary>
+    public Func<string?>? MqttTopicProvider { get; set; }
+
+    /// <summary>Raised with the payload of a message on <see cref="MqttTopicProvider"/>.</summary>
+    public event Action<string>? MqttMessageReceived;
+
     public HaPushClient(
         Func<CancellationToken, Task<string?>> tokenProvider,
         Func<string> baseUrlProvider,
@@ -190,12 +202,68 @@ public sealed class HaPushClient : IAsyncDisposable
 
         ConnectionChanged?.Invoke(true, null);
 
+        // Sent now, but its reply is handled in the loop below: push events can arrive
+        // between the request and the answer, so this cannot assume the next message is
+        // the one it asked for.
+        var mqttSubscriptionId = 0;
+        if (MqttTopicProvider?.Invoke() is { Length: > 0 } mqttTopic)
+        {
+            mqttSubscriptionId = nextMessageId++;
+            await SendJsonAsync(socket, new
+            {
+                id = mqttSubscriptionId,
+                type = "mqtt/subscribe",
+                topic = mqttTopic,
+            }, token);
+        }
+
         while (!token.IsCancellationRequested && socket.State == WebSocketState.Open)
         {
             var message = await ReceiveJsonAsync(socket, token);
 
-            if (message.TryGetProperty("type", out var type)
-                && type.GetString() == "event"
+            var messageId = message.TryGetProperty("id", out var idValue)
+                && idValue.TryGetInt32(out var parsedId)
+                    ? parsedId
+                    : 0;
+
+            var messageType = message.TryGetProperty("type", out var type)
+                ? type.GetString()
+                : null;
+
+            if (mqttSubscriptionId != 0 && messageId == mqttSubscriptionId)
+            {
+                if (messageType == "result")
+                {
+                    var ok = message.TryGetProperty("success", out var mqttOk) && mqttOk.GetBoolean();
+                    if (ok)
+                    {
+                        Log.Info("update", "listening for the Install button");
+                    }
+                    else
+                    {
+                        // Home Assistant allows only administrators to subscribe. The
+                        // update entity still works without this; its Install button is
+                        // what stops doing anything, so say so rather than failing the
+                        // whole connection over it.
+                        Log.Warn("update",
+                            "cannot watch for the Install button; the signed-in account is probably not an administrator");
+                        mqttSubscriptionId = 0;
+                    }
+
+                    continue;
+                }
+
+                if (messageType == "event"
+                    && message.TryGetProperty("event", out var mqttEvent)
+                    && mqttEvent.TryGetProperty("payload", out var mqttPayload))
+                {
+                    MqttMessageReceived?.Invoke(mqttPayload.GetString() ?? string.Empty);
+                    continue;
+                }
+            }
+
+            if (messageType == "event"
+                && messageId == subscriptionId
                 && message.TryGetProperty("event", out var payload))
             {
                 NotificationReceived?.Invoke(payload.Clone());
