@@ -20,8 +20,15 @@ namespace HomeAssistant.Desktop.Services;
 /// </summary>
 public sealed class WindowVisibilityWatcher : IDisposable
 {
+    /// <summary>
+    /// How often to check while the window can be seen. Noticing that it has become
+    /// covered a second or two late costs nothing but a little rendering.
+    /// </summary>
+    private static readonly TimeSpan CoveredCheck = TimeSpan.FromMilliseconds(250);
+
     private readonly IntPtr _hwnd;
     private readonly Func<bool> _isEnabled;
+    private readonly TimeSpan _visibleInterval;
     private readonly System.Threading.Timer _timer;
 
     private bool _lastVisible = true;
@@ -34,7 +41,8 @@ public sealed class WindowVisibilityWatcher : IDisposable
     {
         _hwnd = hwnd;
         _isEnabled = isEnabled;
-        _timer = new System.Threading.Timer(_ => Poll(), null, interval, interval);
+        _visibleInterval = interval;
+        _timer = new System.Threading.Timer(_ => Poll(), null, interval, Timeout.InfiniteTimeSpan);
     }
 
     private void Poll()
@@ -55,13 +63,53 @@ public sealed class WindowVisibilityWatcher : IDisposable
             visible = true;
         }
 
-        if (visible == _lastVisible)
+        if (visible != _lastVisible)
+        {
+            _lastVisible = visible;
+            VisibilityChanged?.Invoke(visible);
+        }
+
+        // Coming back is the half the user feels, so check often while suspended and
+        // rarely while not. Not every return activates the window - a covering window
+        // simply closing does not - so this is what bounds the blank in that case.
+        Reschedule();
+    }
+
+    private void Reschedule()
+    {
+        if (_disposed)
         {
             return;
         }
 
-        _lastVisible = visible;
-        VisibilityChanged?.Invoke(visible);
+        try
+        {
+            _timer.Change(_lastVisible ? _visibleInterval : CoveredCheck, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Declares the window visible straight away, without waiting for the next poll.
+    ///
+    /// The poll interval is the right trade for noticing that a window has become
+    /// covered - nobody minds that happening a second or two late. Coming back is the
+    /// opposite: the user is looking at the window, and every moment before rendering
+    /// resumes is a moment of blank. Activation is the signal for that, and it arrives
+    /// immediately.
+    /// </summary>
+    public void MarkVisible()
+    {
+        if (_disposed || _lastVisible)
+        {
+            return;
+        }
+
+        _lastVisible = true;
+        VisibilityChanged?.Invoke(true);
+        Reschedule();
     }
 
     private bool IsEffectivelyVisible()
@@ -108,28 +156,38 @@ public sealed class WindowVisibilityWatcher : IDisposable
 
     private static bool CoversCompletely(IntPtr candidate, RECT target)
     {
-        if (!IsWindowVisible(candidate) || IsIconic(candidate) || IsCloaked(candidate))
-        {
-            return false;
-        }
-
-        var exStyle = (long)GetWindowLongPtr(candidate, GWL_EXSTYLE);
-
-        // Click-through windows are overlays and do not hide anything.
-        if ((exStyle & WS_EX_TRANSPARENT) != 0)
-        {
-            return false;
-        }
-
+        // Ordered by cost. Geometry is a single cheap call and rejects almost every
+        // window on the desktop, so it goes first; the DWM cloak query is a
+        // cross-process call and only worth making for a window that would otherwise
+        // qualify. This matters because the poll runs several times a second while
+        // the dashboard is covered.
         if (!GetWindowRect(candidate, out var rect))
         {
             return false;
         }
 
-        return rect.Left <= target.Left
+        var covers = rect.Left <= target.Left
             && rect.Top <= target.Top
             && rect.Right >= target.Right
             && rect.Bottom >= target.Bottom;
+
+        if (!covers)
+        {
+            return false;
+        }
+
+        if (!IsWindowVisible(candidate) || IsIconic(candidate))
+        {
+            return false;
+        }
+
+        // Click-through windows are overlays and do not hide anything.
+        if (((long)GetWindowLongPtr(candidate, GWL_EXSTYLE) & WS_EX_TRANSPARENT) != 0)
+        {
+            return false;
+        }
+
+        return !IsCloaked(candidate);
     }
 
     private static bool IsCloaked(IntPtr hwnd) =>

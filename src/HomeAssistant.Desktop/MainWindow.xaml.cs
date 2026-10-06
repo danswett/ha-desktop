@@ -275,10 +275,18 @@ public sealed partial class MainWindow : Window
 
     private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
     {
-        if (args.WindowActivationState != WindowActivationState.Deactivated)
+        if (args.WindowActivationState == WindowActivationState.Deactivated)
         {
-            _unseen.Clear();
+            return;
         }
+
+        // Rendering is suspended while the window is covered, and the watcher only
+        // notices it is back on its next poll. Waiting for that is what left the
+        // dashboard blank for a moment after switching to it, so activation resumes
+        // rendering directly.
+        _visibilityWatcher?.MarkVisible();
+
+        _unseen.Clear();
     }
 
     /// <summary>
@@ -322,13 +330,35 @@ public sealed partial class MainWindow : Window
     {
         var shouldRender = _windowVisible && _userPresent;
 
-        DispatcherQueue.TryEnqueue(() =>
+        // Already on the UI thread when this comes from activation, and in that case
+        // the user is watching: apply it now rather than a dispatcher turn later.
+        if (DispatcherQueue.HasThreadAccess)
         {
-            if (_webView is not null)
-            {
-                _webView.Visibility = shouldRender ? Visibility.Visible : Visibility.Collapsed;
-            }
-        });
+            ApplyRenderingState(shouldRender);
+            return;
+        }
+
+        DispatcherQueue.TryEnqueue(() => ApplyRenderingState(shouldRender));
+    }
+
+    private void ApplyRenderingState(bool shouldRender)
+    {
+        if (_webView is null)
+        {
+            return;
+        }
+
+        // Read the current state off the control rather than caching it. The WebView is
+        // rebuilt wholesale after a browser crash, and a cached flag would then describe
+        // a control that no longer exists - leaving rendering stuck on or off.
+        var target = shouldRender ? Visibility.Visible : Visibility.Collapsed;
+        if (_webView.Visibility == target)
+        {
+            return;
+        }
+
+        _webView.Visibility = target;
+        Log.Info("render", shouldRender ? "resumed" : "suspended; the window cannot be seen");
     }
 
     /// <summary>
@@ -588,6 +618,11 @@ public sealed partial class MainWindow : Window
         WebViewHost.Children.Clear();
         WebViewHost.Children.Add(webView);
         _webView = webView;
+
+        // A fresh control is visible by default. If the window happens to be covered -
+        // a crash recovery while parked, say - it would start painting pixels nobody
+        // can see until the next visibility change happened to put it right.
+        UpdateRenderingState();
 
         try
         {
@@ -1092,6 +1127,11 @@ public sealed partial class MainWindow : Window
 
             Activate();
             SetForegroundWindow(_hwnd);
+
+            // Coming back from the tray is the longest suspension of all, and
+            // AppWindow.Show() does not reliably raise Activated, so resume rendering
+            // here rather than relying on it.
+            _visibilityWatcher?.MarkVisible();
         }
         finally
         {
