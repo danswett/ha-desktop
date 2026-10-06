@@ -65,6 +65,12 @@ public sealed class AppSettings
     public bool RequireWindowsHello { get; set; }
 
     /// <summary>
+    /// Taskbar jump list entries, in the order they appear. Windows shows at most
+    /// <see cref="JumpList.MaxSlots"/> of them however many are configured.
+    /// </summary>
+    public List<JumpListSlot> JumpListSlots { get; set; } = [];
+
+    /// <summary>
     /// Written by tools/Register-TickerTarget.ps1. Identifies this machine's mobile_app
     /// registration so the push channel can be opened. Not a credential on its own - the
     /// channel also requires an authenticated websocket.

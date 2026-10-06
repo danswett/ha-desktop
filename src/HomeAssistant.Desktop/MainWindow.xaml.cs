@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using HomeAssistant.Desktop.Services;
 using Microsoft.UI;
@@ -85,6 +88,10 @@ public sealed partial class MainWindow : Window
     private HaEndpoints? _endpoints;
     private ExternalAppBridge? _bridge;
     private bool _locked;
+    private string? _pendingPath;
+    private string? _pendingEntity;
+    private int _nextQueryId;
+    private readonly Dictionary<int, TaskCompletionSource<string?>> _pageQueries = [];
     private string? _credentialSource;
     private CoreWebView2Environment? _webViewEnvironment;
     private bool _signInInProgress;
@@ -423,6 +430,7 @@ public sealed partial class MainWindow : Window
         }
 
         UpdateSettingsButtonVisibility();
+        PublishJumpList();
 
         // Raised before the window is shown, so the dashboard is never briefly visible
         // behind it. The browser still starts underneath: notifications and the unread
@@ -523,6 +531,80 @@ public sealed partial class MainWindow : Window
     private void OnUnlockClick(object sender, RoutedEventArgs e) => _ = UnlockAsync();
 
     private void OnLockExitClick(object sender, RoutedEventArgs e) => Exit();
+
+    /// <summary>
+    /// Carries out what a launch asked for. Arrives either from this process starting
+    /// or, because the app is single instance, from a second launch handing its
+    /// arguments over - which is what a jump list entry does while the app is running.
+    /// </summary>
+    public void Handle(LaunchRequest request)
+    {
+        switch (request.Kind)
+        {
+            case LaunchRequestKind.OpenPage:
+                NavigateToPath(request.Target);
+                break;
+
+            case LaunchRequestKind.ShowEntity:
+                // There is no URL that opens an entity: /_my_redirect has no more_info
+                // route, despite answering 200 like every other frontend path. The
+                // frontend's own way in is a hass-more-info event, so raise it in the
+                // page that is already loaded, or after loading one if there is not.
+                if (_webView?.CoreWebView2 is not null && !string.IsNullOrWhiteSpace(BaseUrl))
+                {
+                    ShowAndFocus();
+                    _ = ShowEntityDialogAsync(request.Target);
+                }
+                else
+                {
+                    _pendingEntity = request.Target;
+                    NavigateToPath("/");
+                }
+
+                break;
+
+            case LaunchRequestKind.PerformOnEntity:
+                _ = PerformOnEntityAsync(request.Target);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Toggles an entity without involving the page, so it works whether or not the
+    /// dashboard is loaded - which it may not be, if the app was launched purely to
+    /// carry out this one thing.
+    /// </summary>
+    private async Task PerformOnEntityAsync(string entityId)
+    {
+        try
+        {
+            if (await GetAccessTokenAsync(CancellationToken.None) is not { } token)
+            {
+                Log.Warn("jumplist", $"cannot act on {entityId}: no credentials");
+                return;
+            }
+
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            var body = JsonSerializer.Serialize(new { entity_id = entityId });
+            using var content = new StringContent(body, Encoding.UTF8, "application/json");
+
+            // homeassistant.toggle covers every domain that has a notion of on and off,
+            // so one call serves lights, switches, covers, locks and the rest.
+            using var response = await http.PostAsync(
+                new Uri(new Uri(BaseUrl), "/api/services/homeassistant/toggle"), content);
+
+            Log.Info("jumplist", $"toggled {entityId} ({(int)response.StatusCode})");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException)
+        {
+            Log.Warn("jumplist", $"could not act on {entityId}: {ex.Message}");
+        }
+    }
+
+    private void PublishJumpList() =>
+        JumpList.Publish(_settings.JumpListSlots, Environment.ProcessPath ?? string.Empty);
 
     private void ConfigureWindow()
     {
@@ -672,7 +754,12 @@ public sealed partial class MainWindow : Window
             await endpoints.RefreshAsync();
         }
 
-        Navigate(BaseUrl);
+        // A launch that asked for a particular page should land there directly rather
+        // than loading the default dashboard and then moving.
+        var start = _pendingPath is { } pending ? BaseUrl + pending : BaseUrl;
+        _pendingPath = null;
+
+        Navigate(start);
         StartPushNotifications();
     }
 
@@ -840,17 +927,168 @@ public sealed partial class MainWindow : Window
         return completion.Task.WaitAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Opens one entity's dialog in the loaded dashboard.
+    ///
+    /// The event is one-shot: raised before the shell has attached its listener it is
+    /// dropped silently, which is exactly the race a cold launch creates. Home
+    /// Assistant's own end-to-end tests solve it by dispatching repeatedly until the
+    /// dialog appears, because showing it again is harmless, so this does the same.
+    /// </summary>
+    private async Task ShowEntityDialogAsync(string entityId)
+    {
+        var script = $$"""
+            (async () => {
+              const id = {{JsonSerializer.Serialize(entityId)}};
+              const deadline = Date.now() + 12000;
+              const pause = ms => new Promise(r => setTimeout(r, ms));
+              const isOpen = () => {
+                const root = document.querySelector('home-assistant');
+                return !!(root && root.shadowRoot &&
+                  root.shadowRoot.querySelector('ha-more-info-dialog'));
+              };
+              while (Date.now() < deadline) {
+                const root = document.querySelector('home-assistant');
+                if (root) {
+                  root.dispatchEvent(new CustomEvent('hass-more-info', {
+                    detail: { entityId: id }, bubbles: true, composed: true }));
+                  await pause(250);
+                  if (isOpen()) { return true; }
+                } else {
+                  await pause(200);
+                }
+              }
+              return isOpen();
+            })()
+            """;
+
+        var answer = await QueryPageAsync(script, CancellationToken.None);
+        var opened = answer is { ValueKind: JsonValueKind.True };
+        Log.Info("jumplist", opened ? $"opened {entityId}" : $"could not open {entityId}");
+    }
+
     private void NavigateToPath(string path)
     {
         DispatcherQueue.TryEnqueue(() =>
         {
             ShowAndFocus();
 
+            // A cold launch asking for a page arrives before the browser exists. Hold
+            // the path and let the first navigation use it, rather than loading the
+            // default dashboard and visibly moving off it.
+            if (_webView?.CoreWebView2 is null)
+            {
+                _pendingPath = path.StartsWith('/') ? path : "/" + path;
+                return;
+            }
+
             if (Uri.TryCreate(new Uri(BaseUrl), path, out var target))
             {
                 Navigate(target.ToString());
             }
         });
+    }
+
+    /// <summary>
+    /// Runs a JavaScript expression in the dashboard and waits for its result.
+    ///
+    /// ExecuteScriptAsync cannot await a promise - it serialises whatever the
+    /// expression evaluates to immediately, which for an async function is an empty
+    /// object - so the result comes back over the same message channel the rest of the
+    /// host integration uses, tagged with a correlation id.
+    ///
+    /// This borrows the page's own websocket rather than opening another, so it needs
+    /// no credentials of its own and reflects exactly what the dashboard can see.
+    /// </summary>
+    private async Task<JsonElement?> QueryPageAsync(string expression, CancellationToken cancellationToken)
+    {
+        if (_webView?.CoreWebView2 is not { } core)
+        {
+            return null;
+        }
+
+        var id = Interlocked.Increment(ref _nextQueryId);
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        lock (_pageQueries)
+        {
+            _pageQueries[id] = completion;
+        }
+
+        var script = $$"""
+            (function () {
+              var id = {{id}};
+              (async function () {
+                try {
+                  var result = await ({{expression}});
+                  window.chrome.webview.postMessage(
+                    { type: 'ha-query', id: id, ok: true, data: JSON.stringify(result) });
+                } catch (e) {
+                  window.chrome.webview.postMessage(
+                    { type: 'ha-query', id: id, ok: false, data: String(e) });
+                }
+              })();
+            })();
+            """;
+
+        try
+        {
+            await core.ExecuteScriptAsync(script);
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(20));
+
+            var raw = await completion.Task.WaitAsync(timeout.Token);
+            if (raw is null)
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(raw);
+            return document.RootElement.Clone();
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or JsonException)
+        {
+            Log.Warn("query", $"the dashboard did not answer: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            lock (_pageQueries)
+            {
+                _pageQueries.Remove(id);
+            }
+        }
+    }
+
+    private bool TryCompletePageQuery(JsonElement root)
+    {
+        if (!root.TryGetProperty("type", out var type) || type.GetString() != "ha-query")
+        {
+            return false;
+        }
+
+        if (!root.TryGetProperty("id", out var idValue) || !idValue.TryGetInt32(out var id))
+        {
+            return true;
+        }
+
+        TaskCompletionSource<string?>? completion;
+        lock (_pageQueries)
+        {
+            _pageQueries.Remove(id, out completion);
+        }
+
+        var ok = root.TryGetProperty("ok", out var okValue) && okValue.ValueKind == JsonValueKind.True;
+        var data = root.TryGetProperty("data", out var dataValue) ? dataValue.GetString() : null;
+
+        if (!ok)
+        {
+            Log.Warn("query", $"the dashboard reported: {data}");
+        }
+
+        completion?.TrySetResult(ok ? data : null);
+        return true;
     }
 
     private void ConfigureCoreWebView(CoreWebView2 core)
@@ -961,6 +1199,12 @@ public sealed partial class MainWindow : Window
         {
             _retryAttempt = 0;
             HideStatus();
+
+            if (Interlocked.Exchange(ref _pendingEntity, null) is { } entity)
+            {
+                _ = ShowEntityDialogAsync(entity);
+            }
+
             return;
         }
 
@@ -1075,6 +1319,11 @@ public sealed partial class MainWindow : Window
         try
         {
             using var document = JsonDocument.Parse(e.WebMessageAsJson);
+            if (TryCompletePageQuery(document.RootElement))
+            {
+                return;
+            }
+
             if (_bridge?.TryHandle(document.RootElement) == true)
             {
                 return;
@@ -1464,6 +1713,39 @@ public sealed partial class MainWindow : Window
         Margin = new Thickness(0, 6, 0, 0),
     };
 
+    private string DescribeJumpList()
+    {
+        var count = _settings.JumpListSlots.Count(s => s.IsUsable);
+        return count == 0
+            ? "Nothing configured. Add shortcuts to dashboards, views or single entities."
+            : $"{count} entry{(count == 1 ? string.Empty : "ies")} on the taskbar menu.";
+    }
+
+    /// <summary>
+    /// Asks the dashboard what this Home Assistant has, and hands it to the editor.
+    /// Done when the section is first opened rather than when the dialog is built, so
+    /// opening Settings does not wait on a websocket round trip for every user.
+    /// </summary>
+    private async Task LoadCatalogueAsync(JumpListEditor editor)
+    {
+        try
+        {
+            var catalogue = await QueryPageAsync(HaCatalogue.Script, CancellationToken.None) is { } answer
+                ? HaCatalogue.From(answer)
+                : new HaCatalogue();
+
+            editor.SetCatalogue(catalogue);
+            Log.Info("jumplist", $"catalogue: {catalogue.Pages.Count} page(s), {catalogue.Entities.Count} entities");
+        }
+        catch (Exception ex)
+        {
+            // An editor without suggestions still works by hand, and a failure here
+            // must not escape into the dispatcher.
+            editor.SetCatalogue(new HaCatalogue());
+            Log.Warn("jumplist", $"could not read the catalogue: {ex.Message}");
+        }
+    }
+
     private async Task ShowSettingsDialogAsync()
     {
         if (_settingsDialogOpen)
@@ -1588,7 +1870,34 @@ public sealed partial class MainWindow : Window
             };
             openFolder.Click += (_, _) => OpenDataFolder();
 
-            var panel = new StackPanel { Width = 460 };
+            var jumpEditor = new JumpListEditor(_settings.JumpListSlots);
+            var jumpSection = new Expander
+            {
+                Header = "Taskbar jump list",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Content = jumpEditor.Build(),
+            };
+
+            // Inline rather than a dialog of its own: WinUI allows only one ContentDialog
+            // at a time, and opening a second from inside this one throws from an async
+            // handler, which takes the whole process with it. Keeping it here also means
+            // nothing typed above is lost on the way.
+            var catalogueRequested = false;
+            jumpSection.Expanding += (_, _) =>
+            {
+                if (catalogueRequested)
+                {
+                    return;
+                }
+
+                catalogueRequested = true;
+                _ = LoadCatalogueAsync(jumpEditor);
+            };
+
+            // Wide enough for a jump list row to hold a name, a target and two choices
+            // without wrapping.
+            var panel = new StackPanel { Width = 600 };
             panel.Children.Add(SectionHeader("Home Assistant", first: true));
             panel.Children.Add(internalBox);
             panel.Children.Add(externalBox);
@@ -1608,6 +1917,9 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(startMinimized.Row);
             panel.Children.Add(alwaysOnTop.Row);
             panel.Children.Add(startWithWindows.Row);
+
+            panel.Children.Add(SectionHeader("Taskbar"));
+            panel.Children.Add(jumpSection);
 
             panel.Children.Add(SectionHeader("Advanced"));
             panel.Children.Add(requireHello.Row);
@@ -1653,7 +1965,9 @@ public sealed partial class MainWindow : Window
             _settings.StartMinimized = startMinimized.Toggle.IsOn;
             _settings.DevToolsEnabled = devTools.Toggle.IsOn;
             _settings.RequireWindowsHello = requireHello.Toggle.IsOn;
+            _settings.JumpListSlots = jumpEditor.Result();
             _settings.Save();
+            PublishJumpList();
 
             StartupManager.SetEnabled(startWithWindows.Toggle.IsOn);
             SetAlwaysOnTop(alwaysOnTop.Toggle.IsOn);
