@@ -737,8 +737,13 @@ public sealed partial class MainWindow : Window
         s.AreDefaultContextMenusEnabled = _settings.DevToolsEnabled;
         s.AreDevToolsEnabled = _settings.DevToolsEnabled;
         s.IsStatusBarEnabled = false;
-        s.IsPasswordAutosaveEnabled = true;
-        s.IsGeneralAutofillEnabled = true;
+
+        // Browser furniture that gives the game away. A native app does not offer to
+        // remember your password, and it does not show Chromium's error page: this one
+        // holds its own credentials and draws its own connection status.
+        s.IsPasswordAutosaveEnabled = false;
+        s.IsGeneralAutofillEnabled = false;
+        s.IsBuiltInErrorPageEnabled = false;
         s.IsSwipeNavigationEnabled = false;
         s.IsZoomControlEnabled = true;
 

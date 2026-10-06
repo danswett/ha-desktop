@@ -149,6 +149,14 @@ public sealed partial class SignInWindow : Window
             webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
 
+            // This window exists to take a password, which makes it exactly where the
+            // browser would offer to remember one. It is not a browser.
+            webView.CoreWebView2.Settings.IsPasswordAutosaveEnabled = false;
+            webView.CoreWebView2.Settings.IsGeneralAutofillEnabled = false;
+            webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+            webView.CoreWebView2.Settings.IsBuiltInErrorPageEnabled = false;
+            webView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+
             StatusText.Text = "Waiting for Home Assistant\u2026";
             webView.CoreWebView2.Navigate(_authorizeUri.ToString());
         }
