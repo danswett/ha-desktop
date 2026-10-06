@@ -422,6 +422,8 @@ public sealed partial class MainWindow : Window
             ApplyDefaultPlacement();
         }
 
+        UpdateSettingsButtonVisibility();
+
         // Raised before the window is shown, so the dashboard is never briefly visible
         // behind it. The browser still starts underneath: notifications and the unread
         // count are the reason the app is running, and holding those back would make a
@@ -448,6 +450,23 @@ public sealed partial class MainWindow : Window
         {
             _ = UnlockAsync();
         }
+    }
+
+    /// <summary>
+    /// Drops the gear from the title bar once Home Assistant itself can open these
+    /// settings. Signing in attaches the external bridge, which puts a "Companion App"
+    /// row in Home Assistant's own Settings and sidebar, and two buttons for one dialog
+    /// is one too many on a window meant to be looked at rather than operated.
+    ///
+    /// Signed out there is no such row, and the status overlay - which carries its own
+    /// Settings button - is not showing either, so the gear stays rather than leaving
+    /// the tray icon, possibly hidden in the overflow, as the only way in.
+    /// </summary>
+    private void UpdateSettingsButtonVisibility()
+    {
+        SettingsButton.Visibility = _auth?.IsSignedIn == true
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private void ShowLock(string detail)
@@ -1408,6 +1427,7 @@ public sealed partial class MainWindow : Window
                 // the next launch. Rebuilding the browser puts the two back in step.
                 if (wasSignedIn != (_auth?.IsSignedIn == true))
                 {
+                    UpdateSettingsButtonVisibility();
                     _bridge = null;
                     _ = RestartWebViewAsync();
                 }
