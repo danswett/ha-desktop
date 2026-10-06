@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Installs Home Assistant Desktop per user, into %LOCALAPPDATA%\Programs.
+
+  Per-user on purpose. The app is self-contained, writes its settings and its WebView2
+  profile under the user's own profile, and auto-starts from HKCU - there is nothing in
+  it that belongs to the machine. Installing per user also means no administrator
+  prompt, which matters when putting it on several machines.
+
+  Built by tools/Build-Installer.ps1, which supplies PublishDir and Version.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="Home Assistant Desktop"
+           Manufacturer="Home Assistant Desktop"
+           Version="$(var.Version)"
+           UpgradeCode="6961EBFC-41C6-4B08-BACC-83BCBE12770F"
+           Scope="perUser"
+           Compressed="yes">
+
+    <SummaryInformation Description="Home Assistant dashboard as an isolated desktop app" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Home Assistant Desktop is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!--
+      The app is meant to be running all the time, so an upgrade would otherwise hit
+      files in use and ask for a reboot. Close it first instead.
+    -->
+    <util:CloseApplication Id="CloseRunningApp"
+                           Target="HomeAssistant.Desktop.exe"
+                           CloseMessage="yes"
+                           RebootPrompt="no"
+                           PromptToContinue="no" />
+
+    <Feature Id="Main" Title="Home Assistant Desktop" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="StartWithWindows" />
+    </Feature>
+
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="HomeAssistantDesktop" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+  </Fragment>
+
+  <Fragment>
+    <!-- Harvested at build time: the published output is several hundred files. -->
+    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.PublishDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder">
+      <Shortcut Id="HomeAssistantShortcut"
+                Name="Home Assistant"
+                Description="Home Assistant dashboard"
+                Target="[INSTALLFOLDER]HomeAssistant.Desktop.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\HomeAssistantDesktop"
+                     Name="Installed"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <!--
+      Opt-in, because an app that silently adds itself to startup is a nuisance. Pass
+      STARTWITHWINDOWS=1 to msiexec, or tick the box in the app's own settings later.
+      The minimized switch starts it straight into the tray.
+    -->
+    <Component Id="StartWithWindows" Directory="INSTALLFOLDER" Condition="STARTWITHWINDOWS = 1">
+      <RegistryValue Root="HKCU"
+                     Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                     Name="HomeAssistantDesktop"
+                     Type="string"
+                     Value="&quot;[INSTALLFOLDER]HomeAssistant.Desktop.exe&quot; --minimized"
+                     KeyPath="yes" />
+    </Component>
+  </Fragment>
+
+</Wix>

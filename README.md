@@ -339,6 +339,8 @@ rather than anything to do with this app:
 
 ## Install
 
+On the machine you build from:
+
 ```powershell
 pwsh -File tools\Install.ps1 -StartWithWindows
 ```
@@ -347,6 +349,41 @@ This publishes a self-contained build to
 `%LOCALAPPDATA%\Programs\HomeAssistantDesktop` and creates a Start Menu shortcut. Both
 .NET and the Windows App SDK are bundled, so the installed copy does not depend on any
 machine-wide runtime.
+
+### Installing on other machines
+
+Build an MSI and carry that instead:
+
+```powershell
+dotnet tool install --global wix --version 5.0.2 --configfile nuget.config
+pwsh -File tools\Build-Installer.ps1
+```
+
+That produces `dist\HomeAssistantDesktop-<version>-x64.msi`, about 75 MB — the
+self-contained app compresses well. Then on each machine:
+
+```powershell
+msiexec /i HomeAssistantDesktop-1.0.0-x64.msi /qb STARTWITHWINDOWS=1
+pwsh -File Register-TickerTarget.ps1 -HaUrl http://<ha-address>:8123 -Token <token>
+```
+
+The install is **per user**: it lands in `%LOCALAPPDATA%\Programs`, starts from HKCU, and
+needs no administrator. There is nothing about the app that belongs to the machine, and
+not needing elevation is the point when putting it on several of them. It appears in
+Add/Remove Programs, upgrades in place, and closes a running copy first so an upgrade
+never asks for a reboot. Uninstalling removes the app but leaves your settings.
+
+`STARTWITHWINDOWS=1` is optional and opt-in; you can also tick the box in the app's own
+settings later.
+
+**Each machine registers as its own device.** The registration script names the device
+after `%COMPUTERNAME%`, so every machine gets its own `device_tracker.<machine>`,
+`notify.mobile_app_<machine>` and push channel, and Home Assistant can address them
+separately or together through a person. Attach each one to the same person and a
+notification sent to that person reaches all of them.
+
+Pin WiX to 5. Versions 6 and later require accepting the Open Source Maintenance Fee
+EULA; 5 is the last release under the plain MS-RL.
 
 ## Build and run from source
 

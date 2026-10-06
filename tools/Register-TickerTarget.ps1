@@ -21,6 +21,7 @@ param(
     [string]$HaUrl = 'http://192.168.1.188:8123',
     [string]$PersonEntity = 'person.copilot',
     [string]$DeviceName = $env:COMPUTERNAME,
+    [string]$Token,
     [switch]$Unregister
 )
 
@@ -29,13 +30,32 @@ $ErrorActionPreference = 'Stop'
 $settingsPath = Join-Path $env:LOCALAPPDATA 'HomeAssistantDesktop\settings.json'
 
 function Get-HaToken {
-    # Read-only reuse of the token the bridge already holds. Never printed.
+    <#
+      A token passed in wins. Otherwise reuse the one the agent bridge already holds,
+      which is convenient on the machine that has it and absent on every other machine -
+      hence the prompt rather than a failure.
+
+      Never printed, and never written anywhere but Home Assistant's own API.
+    #>
+    param([string]$Supplied)
+
+    if ($Supplied) { return $Supplied }
+
     $cfg = Join-Path $env:USERPROFILE '.agent-ha-bridge\config.json'
-    if (-not (Test-Path $cfg)) { throw "No Home Assistant token available at $cfg" }
-    (Get-Content $cfg -Raw | ConvertFrom-Json).homeAssistant.token
+    if (Test-Path $cfg) {
+        $fromBridge = (Get-Content $cfg -Raw | ConvertFrom-Json).homeAssistant.token
+        if ($fromBridge) { return $fromBridge }
+    }
+
+    Write-Host 'A Home Assistant long-lived access token is needed to register this machine.'
+    Write-Host 'Create one under your profile in Home Assistant, at the bottom of the Security tab.'
+    $secure = Read-Host -Prompt 'Token' -AsSecureString
+    $plain = [System.Net.NetworkCredential]::new('', $secure).Password
+    if (-not $plain) { throw 'No token supplied.' }
+    $plain
 }
 
-$token = Get-HaToken
+$token = Get-HaToken -Supplied $Token
 $headers = @{ Authorization = "Bearer $token"; 'Content-Type' = 'application/json' }
 
 function Invoke-HaWebSocket {
@@ -172,10 +192,16 @@ if (-not $state) {
 
 if (Test-Path $settingsPath) {
     $s = Get-Content $settingsPath -Raw | ConvertFrom-Json
-    $s | Add-Member -NotePropertyName PushWebhookId -NotePropertyValue $webhookId -Force
-    $s | ConvertTo-Json | Set-Content $settingsPath
-    Write-Host '  stored the webhook id in the app settings.' -ForegroundColor Green
+} else {
+    # First run on a new machine: the app has not written its settings yet, and
+    # skipping the webhook id here would leave it unable to receive anything.
+    New-Item -ItemType Directory -Path (Split-Path -Parent $settingsPath) -Force | Out-Null
+    $s = [pscustomobject]@{ HomeUrl = $HaUrl }
 }
+
+$s | Add-Member -NotePropertyName PushWebhookId -NotePropertyValue $webhookId -Force
+$s | ConvertTo-Json | Set-Content $settingsPath
+Write-Host '  stored the webhook id in the app settings.' -ForegroundColor Green
 
 # Attaching the tracker to a person is what lets Ticker resolve that person to this
 # machine. It is deliberately the last step, and deliberately non-fatal: the webhook id
