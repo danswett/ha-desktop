@@ -97,6 +97,12 @@ if (-not $SkipPublish) {
     )
     if ($NuGetConfig) { $publishArgs += @('--configfile', $NuGetConfig) }
 
+    # This output is going to other machines, so a resource DLL from the wrong runtime
+    # must fail the build rather than silently cost every toast.
+    if (-not $AllowMissingInsightsResource) {
+        $publishArgs += '-p:RequireMatchingInsightsResource=true'
+    }
+
     dotnet @publishArgs
     if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 }

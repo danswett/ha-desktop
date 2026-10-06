@@ -33,6 +33,13 @@
 
   <PropertyGroup>
     <WindowsAppSdkPackageVersion>2.5.1</WindowsAppSdkPackageVersion>
+    <!--
+      Set true for anything handed to another machine. A resource DLL taken from a
+      different runtime version may not load, and the symptom is the silent loss of
+      every toast, so a release must fail rather than ship that. Left false locally,
+      where a warning is enough and a developer can see it.
+    -->
+    <RequireMatchingInsightsResource Condition="'$(RequireMatchingInsightsResource)' == ''">false</RequireMatchingInsightsResource>
   </PropertyGroup>
 
   <ItemGroup>
@@ -79,14 +86,18 @@
     tools/Copy-InsightsResource.ps1. Run for build output and publish output alike, so
     that running from the IDE behaves the same as the installed app.
   -->
+  <PropertyGroup>
+    <_InsightsStrictSwitch Condition="'$(RequireMatchingInsightsResource)' == 'true'">-RequireVersionMatch</_InsightsStrictSwitch>
+  </PropertyGroup>
+
   <Target Name="CopyInsightsResourceToOutput" AfterTargets="Build">
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\tools\Copy-InsightsResource.ps1&quot; -TargetDirectory &quot;$(OutDir.TrimEnd('\'))&quot; -Version &quot;$(WindowsAppSdkPackageVersion)&quot; -RuntimeIdentifier &quot;$(RuntimeIdentifier)&quot;"
-          ContinueOnError="true" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\tools\Copy-InsightsResource.ps1&quot; -TargetDirectory &quot;$(OutDir.TrimEnd('\'))&quot; -Version &quot;$(WindowsAppSdkPackageVersion)&quot; -RuntimeIdentifier &quot;$(RuntimeIdentifier)&quot; $(_InsightsStrictSwitch)"
+          ContinueOnError="$(RequireMatchingInsightsResource.Equals('false'))" />
   </Target>
 
   <Target Name="CopyInsightsResourceToPublish" AfterTargets="Publish">
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\tools\Copy-InsightsResource.ps1&quot; -TargetDirectory &quot;$(PublishDir.TrimEnd('\'))&quot; -Version &quot;$(WindowsAppSdkPackageVersion)&quot; -RuntimeIdentifier &quot;$(RuntimeIdentifier)&quot;"
-          ContinueOnError="true" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\tools\Copy-InsightsResource.ps1&quot; -TargetDirectory &quot;$(PublishDir.TrimEnd('\'))&quot; -Version &quot;$(WindowsAppSdkPackageVersion)&quot; -RuntimeIdentifier &quot;$(RuntimeIdentifier)&quot; $(_InsightsStrictSwitch)"
+          ContinueOnError="$(RequireMatchingInsightsResource.Equals('false'))" />
   </Target>
 
 </Project>

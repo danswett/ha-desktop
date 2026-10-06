@@ -29,22 +29,34 @@ param(
 $ErrorActionPreference = 'Stop'
 $fileName = 'Microsoft.WindowsAppRuntime.Insights.Resource.dll'
 
-function Test-RuntimePresent {
-    $packages = @(Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.*' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Architecture -eq 'X64' })
+function Get-MatchingRuntime {
+    <#
+      Must match the requested feature band, not merely provide the file. A hosted
+      runner typically ships some Windows App Runtime already - 1.8, say - and taking
+      its copy of the resource DLL yields a file the 2.5 runtime may not load, which
+      costs toasts at runtime with no error anywhere. Version matters.
+    #>
+    param([string]$Band)
 
-    foreach ($package in $packages) {
-        if (Test-Path -LiteralPath (Join-Path $package.InstallLocation $fileName)) {
-            return $package
-        }
-    }
-
-    return $null
+    Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.*' -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Architecture -eq 'X64' -and
+            $_.Version -like "$Band.*" -and
+            (Test-Path -LiteralPath (Join-Path $_.InstallLocation $fileName))
+        } |
+        Select-Object -First 1
 }
 
-if ($existing = Test-RuntimePresent) {
+if ($existing = Get-MatchingRuntime -Band $Version) {
     Write-Host "Windows App Runtime $($existing.Version) already provides $fileName."
     exit 0
+}
+
+$present = @(Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Architecture -eq 'X64' } |
+    Select-Object -ExpandProperty Version)
+if ($present) {
+    Write-Host "Installed x64 runtimes: $($present -join ', ') - none matching $Version."
 }
 
 $url = "https://aka.ms/windowsappsdk/$Version/latest/windowsappruntimeinstall-x64.exe"
@@ -63,9 +75,9 @@ if ($process.ExitCode -ne 0 -and $process.ExitCode -ne -2147009274) {
 
 Remove-Item $installer -ErrorAction SilentlyContinue
 
-$installed = Test-RuntimePresent
+$installed = Get-MatchingRuntime -Band $Version
 if (-not $installed) {
-    throw "The Windows App Runtime was installed but $fileName is still not present. Toast notifications would be broken in anything built here."
+    throw "The Windows App Runtime $Version was installed but no matching package provides $fileName. Toast notifications would be broken in anything built here."
 }
 
 Write-Host "Windows App Runtime $($installed.Version) provides $fileName." -ForegroundColor Green
