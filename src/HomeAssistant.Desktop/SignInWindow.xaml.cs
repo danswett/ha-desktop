@@ -5,6 +5,8 @@ using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Imaging;
+using static HomeAssistant.Desktop.Services.NativeMethods;
 using Microsoft.Web.WebView2.Core;
 using WinRT.Interop;
 
@@ -52,9 +54,66 @@ public sealed partial class SignInWindow : Window
 
         var hwnd = WindowNative.GetWindowHandle(this);
         var appWindow = AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(hwnd));
-        appWindow.Resize(new Windows.Graphics.SizeInt32(560, 760));
+
+        // Home Assistant's login page is a full web page, not a compact form: it can
+        // carry a banner, a provider picker and a multi-factor step.
+        //
+        // AppWindow sizes in physical pixels, so a fixed size shrinks as display scaling
+        // rises - the original 560x760 was only 448x608 at 125%, which is what squeezed
+        // the login page into a scrollbar. Ask in logical pixels and scale to the display,
+        // capped so the window still fits on a small or heavily scaled screen.
+        var work = DisplayArea.GetFromWindowId(appWindow.Id, DisplayAreaFallback.Nearest).WorkArea;
+        var scale = GetDpiForWindow(hwnd) / 96.0;
+        var width = Math.Min((int)(620 * scale), (int)(work.Width * 0.9));
+        var height = Math.Min((int)(880 * scale), (int)(work.Height * 0.9));
+
+        appWindow.MoveAndResize(new Windows.Graphics.RectInt32(
+            work.X + ((work.Width - width) / 2),
+            work.Y + ((work.Height - height) / 2),
+            width,
+            height));
+
+        if (appWindow.Presenter is OverlappedPresenter presenter)
+        {
+            // Nothing here benefits from being maximised, but being able to drag it
+            // larger is the escape hatch if a provider needs more room than this.
+            presenter.IsMaximizable = false;
+            presenter.IsMinimizable = false;
+        }
+
+        ConfigureChrome(appWindow);
 
         Closed += OnClosed;
+    }
+
+    /// <summary>
+    /// Gives this window the app's identity. Without it a second window falls back to
+    /// the generic executable icon and the system's own title bar, which on a dark app
+    /// shows up as a light bar above dark content.
+    /// </summary>
+    private void ConfigureChrome(AppWindow appWindow)
+    {
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(TitleBarArea);
+
+        appWindow.TitleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+        appWindow.TitleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
+        if (!File.Exists(iconPath))
+        {
+            return;
+        }
+
+        appWindow.SetIcon(iconPath);
+        try
+        {
+            TitleBarIcon.Source = new BitmapImage(new Uri(iconPath));
+        }
+        catch (Exception ex) when (ex is UriFormatException or FileNotFoundException)
+        {
+            // Decorative only.
+        }
     }
 
     /// <summary>Shows the window and completes when the user signs in, cancels, or fails.</summary>
@@ -76,8 +135,27 @@ public sealed partial class SignInWindow : Window
             await webView.EnsureCoreWebView2Async(_environment);
 
             webView.CoreWebView2.NavigationStarting += OnNavigationStarting;
+            webView.CoreWebView2.NavigationCompleted += (_, _) =>
+            {
+                LoadingRing.IsActive = false;
+
+                // Only the first load is a wait worth announcing; leaving the text up
+                // makes a loaded page look stuck.
+                if (StatusText.Text.Length > 0 && !ErrorBar.IsOpen)
+                {
+                    StatusText.Text = string.Empty;
+                }
+            };
             webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+
+            // This window exists to take a password, which makes it exactly where the
+            // browser would offer to remember one. It is not a browser.
+            webView.CoreWebView2.Settings.IsPasswordAutosaveEnabled = false;
+            webView.CoreWebView2.Settings.IsGeneralAutofillEnabled = false;
+            webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+            webView.CoreWebView2.Settings.IsBuiltInErrorPageEnabled = false;
+            webView.CoreWebView2.Settings.IsZoomControlEnabled = false;
 
             StatusText.Text = "Waiting for Home Assistant\u2026";
             webView.CoreWebView2.Navigate(_authorizeUri.ToString());
@@ -85,6 +163,7 @@ public sealed partial class SignInWindow : Window
         catch (Exception ex)
         {
             Log.Error("auth", "could not start the sign-in browser", ex);
+            LoadingRing.IsActive = false;
             ShowError(ex.Message);
             CompleteAndClose(new SignInResult(null, ex.Message));
         }

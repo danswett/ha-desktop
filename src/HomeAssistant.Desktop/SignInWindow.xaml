@@ -15,16 +15,42 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Padding="16,12" Spacing="2">
-            <TextBlock Text="Sign in to Home Assistant"
-                       Style="{ThemeResource SubtitleTextBlockStyle}" />
-            <TextBlock x:Name="AddressText"
-                       Style="{ThemeResource CaptionTextBlockStyle}"
-                       Opacity="0.7" />
-        </StackPanel>
+        <!-- Doubles as the drag region: the window extends content into the title bar so
+             its chrome follows the app's theme instead of the system's default light bar.
+             The right padding keeps the address clear of the caption buttons. -->
+        <Grid x:Name="TitleBarArea" Grid.Row="0" Padding="16,10,64,10" ColumnSpacing="10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Image x:Name="TitleBarIcon"
+                   Grid.Column="0"
+                   Width="20"
+                   Height="20"
+                   VerticalAlignment="Top"
+                   Margin="0,3,0,0" />
+
+            <StackPanel Grid.Column="1" Spacing="2">
+                <TextBlock Text="Sign in to Home Assistant"
+                           Style="{ThemeResource SubtitleTextBlockStyle}" />
+                <TextBlock x:Name="AddressText"
+                           Style="{ThemeResource CaptionTextBlockStyle}"
+                           TextTrimming="CharacterEllipsis"
+                           Opacity="0.7" />
+            </StackPanel>
+        </Grid>
 
         <!-- Home Assistant's own login page, so the app never sees a password. -->
         <Grid x:Name="WebViewHost" Grid.Row="1" />
+
+        <ProgressRing x:Name="LoadingRing"
+                      Grid.Row="1"
+                      Width="32"
+                      Height="32"
+                      IsActive="True"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center" />
 
         <InfoBar x:Name="ErrorBar"
                  Grid.Row="1"
@@ -34,7 +60,7 @@
                  IsOpen="False"
                  IsClosable="False" />
 
-        <Grid Grid.Row="2" Padding="16,12" ColumnSpacing="8">
+        <Grid Grid.Row="2" Padding="20,10" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />

@@ -82,8 +82,17 @@ public sealed partial class MainWindow : Window
     private readonly UnseenNotifications _unseen = new();
     private readonly ProtectedStore _secrets = new();
     private HaAuth? _auth;
+    private HaEndpoints? _endpoints;
+    private string? _credentialSource;
     private CoreWebView2Environment? _webViewEnvironment;
     private bool _signInInProgress;
+
+    /// <summary>
+    /// The Home Assistant address currently in use. Chosen rather than configured: a
+    /// machine that moves between networks needs the local address at home and the
+    /// external one everywhere else.
+    /// </summary>
+    private string BaseUrl => _endpoints?.Current ?? string.Empty;
 
     // Two independent reasons to stop painting. Rendering requires both.
     private bool _windowVisible = true;
@@ -107,7 +116,7 @@ public sealed partial class MainWindow : Window
 
         _retryTimer = DispatcherQueue.CreateTimer();
         _retryTimer.IsRepeating = false;
-        _retryTimer.Tick += (_, _) => Navigate(_settings.HomeUrl);
+        _retryTimer.Tick += (_, _) => Navigate(BaseUrl);
 
         // Debounced: AppWindow.Changed fires on every step of a drag or resize.
         _placementSaveTimer = DispatcherQueue.CreateTimer();
@@ -156,9 +165,29 @@ public sealed partial class MainWindow : Window
             // Losing these notifications costs efficiency, never correctness.
         }
 
-        _auth = new HaAuth(_secrets, () => _settings.HomeUrl);
+        _auth = new HaAuth(_secrets, () => BaseUrl);
         MigrateSecretsOutOfSettings();
+
+        // Created before anything navigates, so the first page load already uses
+        // whichever address is reachable from wherever this machine currently is.
+        _endpoints = new HaEndpoints(() => (_settings.InternalUrl, _settings.ExternalUrl));
+        _endpoints.Changed += OnEndpointChanged;
     }
+
+    /// <summary>
+    /// The machine moved, and Home Assistant now answers somewhere else. Everything
+    /// holding the old address has to follow.
+    /// </summary>
+    private void OnEndpointChanged(string url) => DispatcherQueue.TryEnqueue(() =>
+    {
+        Log.Info("endpoint", $"reloading the dashboard against {url}");
+        _retryAttempt = 0;
+        Navigate(url);
+
+        // The push client reads the address afresh on each attempt, so it only needs
+        // waking out of whatever backoff the old address earned it.
+        _pushClient?.Reconnect();
+    });
 
     /// <summary>
     /// Moves the webhook id into the encrypted store. It addresses this device to Home
@@ -202,8 +231,8 @@ public sealed partial class MainWindow : Window
         _signInInProgress = true;
         try
         {
-            var (authorize, verifier, state) = HaAuth.BeginAuthorization(_settings.HomeUrl);
-            var window = new SignInWindow(environment, _settings.HomeUrl, authorize, state);
+            var (authorize, verifier, state) = HaAuth.BeginAuthorization(BaseUrl);
+            var window = new SignInWindow(environment, BaseUrl, authorize, state);
             var result = await window.ShowAndWaitAsync();
 
             if (!result.Succeeded)
@@ -212,7 +241,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            await _auth!.SignInAsync(_settings.HomeUrl, result.Code!, verifier, CancellationToken.None);
+            await _auth!.SignInAsync(BaseUrl, result.Code!, verifier, CancellationToken.None);
 
             // The push client caches nothing about credentials, but it may be sitting
             // in a backoff after failing with the old ones.
@@ -303,13 +332,29 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// After a sleep the network went away with the machine, so the page's websocket
     /// is stale however healthy it looks. Reload rather than trust it.
+    ///
+    /// A laptop also wakes somewhere else surprisingly often, so this is the most
+    /// likely moment for the right address to have changed. Re-check before reloading,
+    /// and let the endpoint change drive the reload if it finds a different one.
     /// </summary>
     private void OnSystemResumed()
     {
-        DispatcherQueue.TryEnqueue(() =>
+        _ = Task.Run(async () =>
         {
-            _retryAttempt = 0;
-            ReloadNow();
+            var before = BaseUrl;
+            var after = _endpoints is null ? before : await _endpoints.RefreshAsync();
+
+            if (!string.Equals(before, after, StringComparison.OrdinalIgnoreCase))
+            {
+                // OnEndpointChanged already navigated.
+                return;
+            }
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                _retryAttempt = 0;
+                ReloadNow();
+            });
         });
     }
 
@@ -489,7 +534,22 @@ public sealed partial class MainWindow : Window
         ConfigureCoreWebView(core);
         await core.AddScriptToExecuteOnDocumentCreatedAsync(HostKeyScript);
 
-        Navigate(_settings.HomeUrl);
+        if (string.IsNullOrWhiteSpace(_settings.InternalUrl) && string.IsNullOrWhiteSpace(_settings.ExternalUrl))
+        {
+            ShowStatus("Home Assistant address not set",
+                "Open Settings and enter the address of your Home Assistant.",
+                showActions: true, busy: false);
+            return;
+        }
+
+        // Decide which address to use before the first navigation, so a laptop that
+        // starts up away from home does not have to fail once before being corrected.
+        if (_endpoints is { } endpoints)
+        {
+            await endpoints.RefreshAsync();
+        }
+
+        Navigate(BaseUrl);
         StartPushNotifications();
     }
 
@@ -513,7 +573,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        _toasts = new ToastService(GetAccessTokenAsync, () => _settings.HomeUrl, NavigateToPath);
+        _toasts = new ToastService(GetAccessTokenAsync, () => BaseUrl, NavigateToPath);
         if (!_toasts.TryInitialize())
         {
             _toasts = null;
@@ -534,7 +594,7 @@ public sealed partial class MainWindow : Window
         };
         _toasts.NotificationDismissed += tag => _unseen.Remove(tag);
 
-        _pushClient = new HaPushClient(GetAccessTokenAsync, () => _settings.HomeUrl, () => WebhookId);
+        _pushClient = new HaPushClient(GetAccessTokenAsync, () => BaseUrl, () => WebhookId);
         _pushClient.ConnectionChanged += (connected, error) =>
         {
             if (connected)
@@ -571,6 +631,7 @@ public sealed partial class MainWindow : Window
             {
                 if (await auth.GetAccessTokenAsync(cancellationToken) is { } token)
                 {
+                    NoteCredentialSource("the app's own sign-in");
                     return token;
                 }
             }
@@ -583,6 +644,23 @@ public sealed partial class MainWindow : Window
         }
 
         return await BorrowDashboardTokenAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Records which credential the app is running on. Both paths work, so without
+    /// this there is no way to tell from the outside whether a sign-in is actually
+    /// being used or whether the dashboard's token is quietly carrying everything.
+    /// Logged only when it changes, so it does not repeat on every token refresh.
+    /// </summary>
+    private void NoteCredentialSource(string source)
+    {
+        if (_credentialSource == source)
+        {
+            return;
+        }
+
+        _credentialSource = source;
+        Log.Info("auth", $"using {source}");
     }
 
     /// <summary>
@@ -616,10 +694,16 @@ public sealed partial class MainWindow : Window
                 }
 
                 using var document = JsonDocument.Parse(inner);
-                completion.TrySetResult(
-                    document.RootElement.TryGetProperty("access_token", out var value)
-                        ? value.GetString()
-                        : null);
+                var borrowed = document.RootElement.TryGetProperty("access_token", out var value)
+                    ? value.GetString()
+                    : null;
+
+                if (!string.IsNullOrEmpty(borrowed))
+                {
+                    NoteCredentialSource("the dashboard's own token");
+                }
+
+                completion.TrySetResult(borrowed);
             }
             catch (Exception)
             {
@@ -639,7 +723,7 @@ public sealed partial class MainWindow : Window
         {
             ShowAndFocus();
 
-            if (Uri.TryCreate(new Uri(_settings.HomeUrl), path, out var target))
+            if (Uri.TryCreate(new Uri(BaseUrl), path, out var target))
             {
                 Navigate(target.ToString());
             }
@@ -653,8 +737,13 @@ public sealed partial class MainWindow : Window
         s.AreDefaultContextMenusEnabled = _settings.DevToolsEnabled;
         s.AreDevToolsEnabled = _settings.DevToolsEnabled;
         s.IsStatusBarEnabled = false;
-        s.IsPasswordAutosaveEnabled = true;
-        s.IsGeneralAutofillEnabled = true;
+
+        // Browser furniture that gives the game away. A native app does not offer to
+        // remember your password, and it does not show Chromium's error page: this one
+        // holds its own credentials and draws its own connection status.
+        s.IsPasswordAutosaveEnabled = false;
+        s.IsGeneralAutofillEnabled = false;
+        s.IsBuiltInErrorPageEnabled = false;
         s.IsSwipeNavigationEnabled = false;
         s.IsZoomControlEnabled = true;
 
@@ -703,7 +792,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        ScheduleRetry($"Could not reach {_settings.HomeUrl} ({Describe(e.WebErrorStatus)}).");
+        ScheduleRetry($"Could not reach {BaseUrl} ({Describe(e.WebErrorStatus)}).");
     }
 
     private void OnProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs e)
@@ -950,6 +1039,8 @@ public sealed partial class MainWindow : Window
         _visibilityWatcher = null;
         _systemWatcher?.Dispose();
         _systemWatcher = null;
+        _endpoints?.Dispose();
+        _endpoints = null;
         _ = _pushClient?.DisposeAsync().AsTask();
         _pushClient = null;
         _toasts?.Dispose();
@@ -1081,7 +1172,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
-            Navigate(_settings.HomeUrl);
+            Navigate(BaseUrl);
         }
     }
 
@@ -1112,7 +1203,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnHomeClick(object sender, RoutedEventArgs e) => Navigate(_settings.HomeUrl);
+    private void OnHomeClick(object sender, RoutedEventArgs e) => Navigate(BaseUrl);
 
     private void OnReloadClick(object sender, RoutedEventArgs e) => ReloadNow();
 
@@ -1121,7 +1212,7 @@ public sealed partial class MainWindow : Window
     private void OnRetryClick(object sender, RoutedEventArgs e)
     {
         _retryAttempt = 0;
-        Navigate(_settings.HomeUrl);
+        Navigate(BaseUrl);
     }
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => _ = ShowSettingsDialogAsync();
@@ -1183,8 +1274,25 @@ public sealed partial class MainWindow : Window
         return panel;
     }
 
+    private static TextBlock SectionHeader(string text, bool first = false) => new()
+    {
+        Text = text,
+        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        Margin = new Thickness(0, first ? 0 : 20, 0, 8),
+    };
+
+    private static TextBlock Hint(string text) => new()
+    {
+        Text = text,
+        TextWrapping = TextWrapping.Wrap,
+        Opacity = 0.7,
+        FontSize = 12,
+        Margin = new Thickness(0, 6, 0, 0),
+    };
+
     private async Task ShowSettingsDialogAsync()
-    {        if (_settingsDialogOpen)
+    {
+        if (_settingsDialogOpen)
         {
             return;
         }
@@ -1192,11 +1300,63 @@ public sealed partial class MainWindow : Window
         _settingsDialogOpen = true;
         try
         {
-            var urlBox = new TextBox
+            var internalBox = new TextBox
             {
-                Header = "Dashboard address",
-                Text = _settings.HomeUrl,
-                PlaceholderText = "http://192.168.1.188:8123",
+                Header = "On your own network",
+                Text = _settings.InternalUrl,
+                PlaceholderText = "http://homeassistant.local:8123",
+            };
+
+            var externalBox = new TextBox
+            {
+                Header = "From anywhere else (optional)",
+                Text = _settings.ExternalUrl,
+                PlaceholderText = "https://example.duckdns.org",
+                Margin = new Thickness(0, 10, 0, 0),
+            };
+
+            var inUse = new TextBlock
+            {
+                Text = string.IsNullOrEmpty(BaseUrl) ? "Not connected." : $"Currently using {BaseUrl}",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.7,
+                FontSize = 12,
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+
+            var detect = new Button
+            {
+                Content = "Fill in from Home Assistant",
+                Margin = new Thickness(0, 10, 0, 0),
+            };
+            detect.Click += async (_, _) =>
+            {
+                detect.IsEnabled = false;
+                try
+                {
+                    var discovered = await FetchConfiguredUrlsAsync(CancellationToken.None);
+                    if (discovered is null)
+                    {
+                        inUse.Text = "Could not ask Home Assistant. Check the address above, or sign in first.";
+                        return;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(discovered.Value.Internal))
+                    {
+                        internalBox.Text = discovered.Value.Internal;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(discovered.Value.External))
+                    {
+                        externalBox.Text = discovered.Value.External;
+                    }
+
+                    inUse.Text = "Filled in from Home Assistant's own configuration.";
+                }
+                finally
+                {
+                    detect.IsEnabled = true;
+                }
             };
 
             var closeToTray = MakeToggleRow("Close button hides to the tray", _settings.CloseToTray);
@@ -1209,38 +1369,52 @@ public sealed partial class MainWindow : Window
             var openFolder = new HyperlinkButton
             {
                 Content = "Open the app's data folder",
-                Margin = new Thickness(0, 8, 0, 0),
+                Margin = new Thickness(0, 6, 0, 0),
                 Padding = new Thickness(0),
             };
             openFolder.Click += (_, _) => OpenDataFolder();
 
-            var accountRow = BuildAccountRow();
+            var panel = new StackPanel { Width = 460 };
+            panel.Children.Add(SectionHeader("Home Assistant", first: true));
+            panel.Children.Add(internalBox);
+            panel.Children.Add(externalBox);
+            panel.Children.Add(Hint(
+                "The local address is used whenever it answers, and the external one only when it "
+                + "does not. Reaching Home Assistant through a public tunnel makes it attribute every "
+                + "client to a single WAN address, which is what trips its IP ban."));
+            panel.Children.Add(detect);
+            panel.Children.Add(inUse);
 
-            var panel = new StackPanel { Spacing = 0, Width = 420 };
-            panel.Children.Add(urlBox);
-            panel.Children.Add(new TextBlock
-            {
-                Text = "On the LAN, use the direct address. Going through the public tunnel makes "
-                     + "Home Assistant attribute every client to one WAN address, which is what trips its IP ban.",
-                TextWrapping = TextWrapping.Wrap,
-                Opacity = 0.7,
-                Margin = new Thickness(0, 6, 0, 10),
-                FontSize = 12,
-            });
+            panel.Children.Add(SectionHeader("Account"));
+            panel.Children.Add(BuildAccountRow());
+
+            panel.Children.Add(SectionHeader("Window"));
             panel.Children.Add(closeToTray.Row);
             panel.Children.Add(minimizeToTray.Row);
             panel.Children.Add(startMinimized.Row);
             panel.Children.Add(alwaysOnTop.Row);
             panel.Children.Add(startWithWindows.Row);
+
+            panel.Children.Add(SectionHeader("Advanced"));
             panel.Children.Add(devTools.Row);
-            panel.Children.Add(accountRow);
             panel.Children.Add(openFolder);
+
+            // Use the height the window actually has rather than a fixed guess, which
+            // is what made this scroll as soon as a section was added.
+            var available = RootGrid.ActualHeight > 0 ? RootGrid.ActualHeight - 220 : 560;
 
             var dialog = new ContentDialog
             {
                 XamlRoot = RootGrid.XamlRoot,
                 Title = "Settings",
-                Content = new ScrollViewer { Content = panel, MaxHeight = 560 },
+                Content = new ScrollViewer
+                {
+                    Content = panel,
+                    MaxHeight = Math.Clamp(available, 360, 900),
+                    HorizontalScrollMode = ScrollMode.Disabled,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                },
                 PrimaryButtonText = "Save",
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Primary,
@@ -1252,10 +1426,12 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            var previousUrl = _settings.HomeUrl;
+            var previousInternal = _settings.InternalUrl;
+            var previousExternal = _settings.ExternalUrl;
             var devToolsChanged = devTools.Toggle.IsOn != _settings.DevToolsEnabled;
 
-            _settings.HomeUrl = urlBox.Text;
+            _settings.InternalUrl = internalBox.Text;
+            _settings.ExternalUrl = externalBox.Text;
             _settings.CloseToTray = closeToTray.Toggle.IsOn;
             _settings.MinimizeToTray = minimizeToTray.Toggle.IsOn;
             _settings.StartMinimized = startMinimized.Toggle.IsOn;
@@ -1271,15 +1447,70 @@ public sealed partial class MainWindow : Window
                 core.Settings.AreDefaultContextMenusEnabled = _settings.DevToolsEnabled;
             }
 
-            if (!string.Equals(previousUrl, _settings.HomeUrl, StringComparison.OrdinalIgnoreCase))
+            var addressesChanged =
+                !string.Equals(previousInternal, _settings.InternalUrl, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(previousExternal, _settings.ExternalUrl, StringComparison.OrdinalIgnoreCase);
+
+            if (addressesChanged && _endpoints is { } endpoints)
             {
-                _retryAttempt = 0;
-                Navigate(_settings.HomeUrl);
+                var before = BaseUrl;
+                var after = await endpoints.RefreshAsync();
+
+                // A change of address reloads through OnEndpointChanged; if the choice
+                // happens to be the same one, reload anyway so an edited address takes
+                // effect immediately.
+                if (string.Equals(before, after, StringComparison.OrdinalIgnoreCase))
+                {
+                    _retryAttempt = 0;
+                    Navigate(after);
+                }
             }
         }
         finally
         {
             _settingsDialogOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// Asks Home Assistant for the addresses it believes it has. Saves the user copying
+    /// them by hand, and is the same source first-run setup will use.
+    /// </summary>
+    private async Task<(string Internal, string External)?> FetchConfiguredUrlsAsync(CancellationToken token)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(BaseUrl))
+            {
+                return null;
+            }
+
+            if (await GetAccessTokenAsync(token) is not { } accessToken)
+            {
+                return null;
+            }
+
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(BaseUrl + "/"), "api/config"));
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+            using var response = await http.SendAsync(request, token);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+            var root = document.RootElement;
+
+            return (
+                root.TryGetProperty("internal_url", out var i) ? i.GetString() ?? string.Empty : string.Empty,
+                root.TryGetProperty("external_url", out var e) ? e.GetString() ?? string.Empty : string.Empty);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or UriFormatException)
+        {
+            Log.Warn("endpoint", $"could not read Home Assistant's configured addresses: {ex.Message}");
+            return null;
         }
     }
 

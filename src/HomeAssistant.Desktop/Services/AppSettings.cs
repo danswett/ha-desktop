@@ -9,7 +9,24 @@ namespace HomeAssistant.Desktop.Services;
 /// </summary>
 public sealed class AppSettings
 {
-    public string HomeUrl { get; set; } = "http://192.168.1.188:8123";
+    /// <summary>
+    /// The address on the local network. Preferred whenever it answers: going through
+    /// the public tunnel makes Home Assistant attribute every client to one WAN
+    /// address, which is what trips its IP ban.
+    /// </summary>
+    public string InternalUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The address that works from anywhere. Optional, and only needed by a machine
+    /// that leaves the network it was set up on.
+    /// </summary>
+    public string ExternalUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Superseded by <see cref="InternalUrl"/>. Retained so an older settings file
+    /// still loads, and migrated away on first read.
+    /// </summary>
+    public string? HomeUrl { get; set; }
 
     /// <summary>Closing the window hides it to the notification area instead of exiting.</summary>
     public bool CloseToTray { get; set; } = true;
@@ -109,16 +126,40 @@ public sealed class AppSettings
 
     private void Normalize()
     {
-        if (string.IsNullOrWhiteSpace(HomeUrl))
+        // An older file carried a single address, which was always the local one.
+        if (!string.IsNullOrWhiteSpace(HomeUrl))
         {
-            HomeUrl = "http://192.168.1.188:8123";
+            if (string.IsNullOrWhiteSpace(InternalUrl))
+            {
+                InternalUrl = HomeUrl;
+            }
+
+            HomeUrl = null;
         }
 
-        HomeUrl = HomeUrl.Trim();
-        if (!HomeUrl.Contains("://", StringComparison.Ordinal))
+        InternalUrl = NormalizeUrl(InternalUrl);
+        ExternalUrl = NormalizeUrl(ExternalUrl);
+    }
+
+    /// <summary>
+    /// Tidies a typed-in address. Deliberately does not invent a default: a machine
+    /// that has not been told where Home Assistant lives should say so rather than
+    /// quietly failing to reach somebody else's.
+    /// </summary>
+    private static string NormalizeUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
         {
-            HomeUrl = "http://" + HomeUrl;
+            return string.Empty;
         }
+
+        url = url.Trim().TrimEnd('/');
+        if (!url.Contains("://", StringComparison.Ordinal))
+        {
+            url = "http://" + url;
+        }
+
+        return url;
     }
 }
 
