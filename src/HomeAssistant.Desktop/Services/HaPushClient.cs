@@ -26,6 +26,7 @@ public sealed class HaPushClient : IAsyncDisposable
     private readonly Func<string?> _webhookIdProvider;
 
     private CancellationTokenSource? _cts;
+    private CancellationTokenSource? _retryWake;
     private Task? _loop;
 
     /// <summary>Raised with the notification payload Home Assistant pushed.</summary>
@@ -53,6 +54,24 @@ public sealed class HaPushClient : IAsyncDisposable
 
         _cts = new CancellationTokenSource();
         _loop = Task.Run(() => RunAsync(_cts.Token));
+    }
+
+    /// <summary>
+    /// Cuts short whatever backoff the client is in. Called when the credentials
+    /// change, since the reason for the last failure may have just been fixed and
+    /// waiting out a minute of backoff would be waiting for nothing.
+    /// </summary>
+    public void Reconnect()
+    {
+        try
+        {
+            _retryWake?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The loop moved on between the read and the cancel, which means it is
+            // already doing what the wake would have asked for.
+        }
     }
 
     private async Task RunAsync(CancellationToken token)
@@ -83,13 +102,27 @@ public sealed class HaPushClient : IAsyncDisposable
             var delay = RetryDelaysSeconds[Math.Min(attempt, RetryDelaysSeconds.Length - 1)];
             attempt++;
 
+            using var wake = CancellationTokenSource.CreateLinkedTokenSource(token);
+            _retryWake = wake;
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(delay), token);
+                await Task.Delay(TimeSpan.FromSeconds(delay), wake.Token);
             }
             catch (OperationCanceledException)
             {
-                return;
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                // Woken on purpose: the credentials changed, so the reason for the last
+                // failure may be gone. Start the backoff over rather than carrying on
+                // from a long delay earned under the old ones.
+                attempt = 0;
+            }
+            finally
+            {
+                _retryWake = null;
             }
         }
     }
