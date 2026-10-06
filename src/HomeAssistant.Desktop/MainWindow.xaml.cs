@@ -78,6 +78,8 @@ public sealed partial class MainWindow : Window
     private SystemStateWatcher? _systemWatcher;
     private ToastService? _toasts;
     private HaPushClient? _pushClient;
+    private TaskbarBadge? _badge;
+    private readonly UnseenNotifications _unseen = new();
 
     // Two independent reasons to stop painting. Rendering requires both.
     private bool _windowVisible = true;
@@ -119,6 +121,16 @@ public sealed partial class MainWindow : Window
         _appWindow.Closing += OnAppWindowClosing;
         Closed += OnWindowClosed;
 
+        // Looking at the dashboard is reading everything on it, so the badge clears.
+        Activated += OnWindowActivated;
+
+        _badge = new TaskbarBadge(_hwnd);
+        _unseen.CountChanged += OnUnseenCountChanged;
+        if (_tray is { } tray)
+        {
+            tray.ShellRestarted += () => DispatcherQueue.TryEnqueue(() => _badge?.Reapply());
+        }
+
         // Chromium cannot see that a composition-hosted WebView2 is covered, so the
         // host watches for it and stops the page painting pixels nobody can see.
         _visibilityWatcher = new WindowVisibilityWatcher(
@@ -145,7 +157,50 @@ public sealed partial class MainWindow : Window
     {
         _windowVisible = visible;
         UpdateRenderingState();
+
+        // Belt and braces for the badge. Activated is the primary signal, but it does
+        // not fire for every way a window can come back to the front, and a count that
+        // will not clear is worse than one that clears early.
+        if (visible && IsDashboardOnScreen())
+        {
+            _unseen.Clear();
+        }
     }
+
+    private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
+    {
+        if (args.WindowActivationState != WindowActivationState.Deactivated)
+        {
+            _unseen.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Whether the dashboard is actually on screen for the user to read.
+    ///
+    /// Asked live rather than tracked from Activated: the window is parked in the tray
+    /// with AppWindow.Hide(), and WinUI raises no Activated event for that, so a cached
+    /// flag stays stuck on "active" and the badge never counts anything.
+    ///
+    /// Deliberately not a focus test. A dashboard sitting uncovered on screen has been
+    /// read whether or not it holds the keyboard, and the same predicate decides both
+    /// whether to count a notification and when to clear the count, so the two can
+    /// never disagree.
+    /// </summary>
+    private bool IsDashboardOnScreen() =>
+        _windowVisible && IsWindowVisible(_hwnd) && !IsIconic(_hwnd);
+
+    /// <summary>
+    /// Raised off the push client's thread, so it has to be marshalled: the taskbar's
+    /// COM object has thread affinity and the window belongs to the UI thread.
+    /// </summary>
+    private void OnUnseenCountChanged(int count) =>
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            Log.Info("badge", $"unseen count is now {count}");
+            _badge?.SetCount(count);
+            _tray?.SetBadgeCount(count);
+        });
 
     private void OnUserPresenceChanged(bool present)
     {
@@ -385,6 +440,20 @@ public sealed partial class MainWindow : Window
             _toasts = null;
             return;
         }
+
+        // A notification that arrives while the user is already looking at the dashboard
+        // has been seen by definition, so it never reaches the badge.
+        _toasts.NotificationShown += tag =>
+        {
+            if (IsDashboardOnScreen())
+            {
+                Log.Info("badge", "notification arrived while the dashboard was on screen; not counted");
+                return;
+            }
+
+            _unseen.Add(tag);
+        };
+        _toasts.NotificationDismissed += tag => _unseen.Remove(tag);
 
         _pushClient = new HaPushClient(GetAccessTokenAsync, () => _settings.HomeUrl, () => _settings.PushWebhookId);
         _pushClient.ConnectionChanged += (connected, error) =>
@@ -777,6 +846,8 @@ public sealed partial class MainWindow : Window
         _pushClient = null;
         _toasts?.Dispose();
         _toasts = null;
+        _badge?.Dispose();
+        _badge = null;
         DisposeWebView();
         _tray?.Dispose();
         _tray = null;

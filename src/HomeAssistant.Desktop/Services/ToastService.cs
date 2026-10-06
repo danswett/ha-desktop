@@ -33,6 +33,15 @@ public sealed class ToastService : IDisposable
 
     private bool _registered;
 
+    /// <summary>Raised when a toast is put on screen, with its tag if it had one.</summary>
+    public event Action<string?>? NotificationShown;
+
+    /// <summary>
+    /// Raised when a notification stops being outstanding: Home Assistant cleared it, or
+    /// the user acted on it.
+    /// </summary>
+    public event Action<string?>? NotificationDismissed;
+
     public ToastService(
         Func<CancellationToken, Task<string?>> tokenProvider,
         Func<string> baseUrlProvider,
@@ -43,8 +52,7 @@ public sealed class ToastService : IDisposable
         _onNavigate = onNavigate;
     }
 
-    public bool TryInitialize()
-    {
+    public bool TryInitialize()    {
         try
         {
             var manager = AppNotificationManager.Default;
@@ -113,6 +121,7 @@ public sealed class ToastService : IDisposable
         else
         {
             Log.Info("toasts", $"toast shown (id {notification.Id}, tag: {(string.IsNullOrEmpty(tag) ? "none" : tag)})");
+            NotificationShown?.Invoke(tag);
         }
     }
 
@@ -164,11 +173,19 @@ public sealed class ToastService : IDisposable
         {
             // A notification the user already dismissed is not an error.
         }
+
+        // Raised whether or not the removal found anything: Home Assistant considers it
+        // cleared, so the badge should agree.
+        NotificationDismissed?.Invoke(tag);
     }
 
     private void OnNotificationInvoked(AppNotificationManager sender, AppNotificationActivatedEventArgs args)
     {
         var arguments = args.Arguments;
+        arguments.TryGetValue(TagArgument, out var invokedTag);
+
+        // Acting on a toast - body or button - is the user seeing it.
+        NotificationDismissed?.Invoke(invokedTag);
 
         if (arguments.TryGetValue("navigate", out var path) && !string.IsNullOrEmpty(path))
         {
@@ -177,8 +194,7 @@ public sealed class ToastService : IDisposable
 
         if (arguments.TryGetValue(ActionArgument, out var action) && !string.IsNullOrEmpty(action))
         {
-            arguments.TryGetValue(TagArgument, out var tag);
-            _ = FireActionEventAsync(action, tag);
+            _ = FireActionEventAsync(action, invokedTag);
         }
     }
 

@@ -31,6 +31,10 @@ public sealed class TrayIcon : IDisposable
 
     private IntPtr _hwnd;
     private IntPtr _hIcon;
+    private IntPtr _badgedIcon;
+    private readonly string _iconPath;
+    private readonly string _baseTooltip;
+    private int _badgeCount;
     private NOTIFYICONDATA _data;
     private bool _added;
     private bool _disposed;
@@ -44,10 +48,18 @@ public sealed class TrayIcon : IDisposable
     /// <summary>Queried for the show/hide item's caption.</summary>
     public Func<string>? ShowHideCaption { get; set; }
 
+    /// <summary>
+    /// Raised when Explorer restarts. Anything else drawn onto the taskbar is gone too
+    /// and has to be put back.
+    /// </summary>
+    public event Action? ShellRestarted;
+
     public TrayIcon(string tooltip, string iconPath)
     {
         _wndProcDelegate = TrayWndProc;
         _taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
+        _iconPath = iconPath;
+        _baseTooltip = tooltip;
 
         CreateMessageWindow();
         _hIcon = LoadTrayIcon(iconPath);
@@ -125,6 +137,61 @@ public sealed class TrayIcon : IDisposable
         Shell_NotifyIcon(NIM_MODIFY, ref _data);
     }
 
+    /// <summary>
+    /// Shows a count on the tray icon.
+    ///
+    /// The taskbar badge cannot cover this: parking in the tray hides the window, which
+    /// takes its taskbar button with it. Since that is how the app spends most of its
+    /// life, the tray icon has to carry the count itself.
+    /// </summary>
+    public void SetBadgeCount(int count)
+    {
+        count = Math.Max(0, count);
+        if (_disposed || count == _badgeCount)
+        {
+            return;
+        }
+
+        _badgeCount = count;
+
+        var previous = _badgedIcon;
+        _badgedIcon = IntPtr.Zero;
+
+        if (count > 0)
+        {
+            var size = Math.Max(16, GetSystemMetrics(SM_CXSMICON));
+            _badgedIcon = BadgeIcon.CreateOverIcon(_iconPath, count, size);
+        }
+
+        var icon = _badgedIcon != IntPtr.Zero ? _badgedIcon : _hIcon;
+        if (icon != IntPtr.Zero)
+        {
+            _data.hIcon = icon;
+        }
+
+        _data.szTip = Truncate(
+            count switch
+            {
+                0 => _baseTooltip,
+                1 => $"{_baseTooltip} - 1 new notification",
+                _ => $"{_baseTooltip} - {count} new notifications",
+            },
+            127);
+
+        if (_added)
+        {
+            Shell_NotifyIcon(NIM_MODIFY, ref _data);
+        }
+
+        Log.Info("badge", $"tray icon set to {count} (drawn: {_badgedIcon != IntPtr.Zero})");
+
+        // Only once the shell has taken the replacement.
+        if (previous != IntPtr.Zero)
+        {
+            DestroyIcon(previous);
+        }
+    }
+
     private IntPtr TrayWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         if (msg == _taskbarCreatedMessage)
@@ -132,6 +199,7 @@ public sealed class TrayIcon : IDisposable
             // Explorer restarted and dropped every tray icon. Re-add ours.
             _added = false;
             AddIcon();
+            ShellRestarted?.Invoke();
             return IntPtr.Zero;
         }
 
@@ -225,6 +293,12 @@ public sealed class TrayIcon : IDisposable
         {
             DestroyIcon(_hIcon);
             _hIcon = IntPtr.Zero;
+        }
+
+        if (_badgedIcon != IntPtr.Zero)
+        {
+            DestroyIcon(_badgedIcon);
+            _badgedIcon = IntPtr.Zero;
         }
 
         if (_hwnd != IntPtr.Zero)

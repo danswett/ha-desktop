@@ -62,6 +62,7 @@ The last one lets camera cards start streaming without a click.
 | **Full screen** | `F11`, and automatically when a camera card goes full screen |
 | **Stays on the dashboard** | Links that want a new window open in your real browser |
 | **Native notifications** | Home Assistant pushes over a websocket channel; action buttons report back as `mobile_app_notification_action` |
+| **Unread count** | On the taskbar button and the tray icon; clears when the dashboard is back on screen |
 | **Idles when it cannot be seen** | Stops rendering when fully covered, locked, asleep, or the display is off |
 
 ## Measured against the Chrome app
@@ -270,6 +271,30 @@ click, so this is the one step that cannot be automated.
 `%LOCALAPPDATA%\HomeAssistantDesktop\app.log` records registration, channel state, and
 every toast. None of this has a UI, so the log is the only way to tell working from
 quietly broken.
+
+### Unread count
+
+Notifications that arrive while the dashboard is not on screen raise a count, shown in
+two places because neither covers the app's whole life:
+
+- the **taskbar button**, via the shell's overlay icon
+- the **tray icon**, redrawn with the count in its corner
+
+The tray is not a nicety. Parking the app hides the window, which takes its taskbar
+button with it, and that is how the app spends most of its time — so a taskbar badge
+alone would be invisible exactly when it mattered. Windows App SDK's
+`BadgeNotificationManager` is not used at all: it expects package identity this app
+deliberately does not have.
+
+Tagged notifications are tracked by tag rather than counted, so a sensor re-sending
+under the same tag replaces its predecessor instead of inflating the badge — one
+doorbell is one badge however many times it fires. The count clears when the dashboard
+comes back on screen.
+
+Whether the dashboard is "on screen" is asked live rather than tracked from WinUI's
+`Activated` event. Parking the window calls `AppWindow.Hide()`, for which WinUI raises
+no deactivation, so a cached flag stays stuck on "active" and nothing is ever counted.
+The same predicate decides both counting and clearing, so the two cannot disagree.
 
 ### Three ways this fails silently
 
