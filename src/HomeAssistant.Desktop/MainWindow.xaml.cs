@@ -2047,7 +2047,7 @@ public sealed partial class MainWindow : Window
                 Header = "Taskbar jump list",
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Content = jumpEditor.Build(),
+                Content = Scrollable(jumpEditor.Build()),
             };
 
             // Inline rather than a dialog of its own: WinUI allows only one ContentDialog
@@ -2072,7 +2072,7 @@ public sealed partial class MainWindow : Window
                 Margin = new Thickness(0, 8, 0, 0),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Content = thumbEditor.Build(),
+                Content = Scrollable(thumbEditor.Build()),
             };
             thumbSection.Expanding += (_, _) =>
             {
@@ -2154,9 +2154,12 @@ public sealed partial class MainWindow : Window
                 hotkeyStatus.IsOpen = false;
             };
 
-            // Wide enough for a jump list row to hold a name, a target and two choices
-            // without wrapping.
-            var panel = new StackPanel { Width = 600 };
+            // Stretched rather than given a width. A fixed width wider than the window
+            // is simply clipped - the dialog does not grow, and horizontal scrolling is
+            // off - which put the toggle switches off the right edge and out of reach
+            // on a narrow window. The dialog's own maximum, set below, is what decides
+            // how wide this actually gets.
+            var panel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
             panel.Children.Add(SectionHeader("Home Assistant", first: true));
             panel.Children.Add(internalBox);
             panel.Children.Add(externalBox);
@@ -2198,9 +2201,16 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(devTools.Row);
             panel.Children.Add(openFolder);
 
-            // Use the height the window actually has rather than a fixed guess, which
-            // is what made this scroll as soon as a section was added.
+            // Use the size the window actually has rather than a fixed guess, which is
+            // what made this scroll as soon as a section was added.
             var available = RootGrid.ActualHeight > 0 ? RootGrid.ActualHeight - 220 : 560;
+
+            // The width matters for the same reason but fails worse: content wider than
+            // the dialog is clipped rather than scrolled, so anything on the right - the
+            // toggle switches, every one of them - becomes unreachable. The dialog's own
+            // default maximum is narrower than this content wants, so it is raised here,
+            // then held below what the window can show.
+            var room = RootGrid.ActualWidth > 0 ? RootGrid.ActualWidth - 48 : 600;
 
             var dialog = new ContentDialog
             {
@@ -2219,6 +2229,14 @@ public sealed partial class MainWindow : Window
                 DefaultButton = ContentDialogButton.Primary,
                 RequestedTheme = RootGrid.ActualTheme,
             };
+
+            // Read from the template rather than set on the dialog: ContentDialog sizes
+            // its own chrome from these resources, so assigning Width or MaxWidth
+            // directly leaves the inner layout at the old maximum and clips just the
+            // same.
+            var width = Math.Clamp(room, 320, 680);
+            dialog.Resources["ContentDialogMaxWidth"] = width;
+            dialog.Resources["ContentDialogMinWidth"] = Math.Min(width, 320d);
 
             if (await dialog.ShowAsync() != ContentDialogResult.Primary)
             {
@@ -2357,6 +2375,20 @@ public sealed partial class MainWindow : Window
         return (row, toggle);
     }
 
+    /// <summary>
+    /// Lets wide content scroll sideways rather than be cut off. A shortcut row holds a
+    /// name, a target and up to three choices, which does not fit a narrow dialog, and
+    /// clipping it would hide the controls on the right exactly as it hid the toggles.
+    /// </summary>
+    private static ScrollViewer Scrollable(UIElement content) => new()
+    {
+        Content = content,
+        HorizontalScrollMode = ScrollMode.Auto,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+        VerticalScrollMode = ScrollMode.Disabled,
+        VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+    };
+
     /// <summary>The same shape as a toggle row, for a control that is not a toggle.</summary>
     private static Grid LabelledRow(string label, FrameworkElement control)
     {
@@ -2405,6 +2437,10 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
 }
+
+
+
+
 
 
 
