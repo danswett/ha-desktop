@@ -58,7 +58,7 @@ The last one lets camera cards start streaming without a click.
 | **Auto-recovery** | Navigation failures retry with backoff (2s → 60s); a dead browser process is rebuilt |
 | **Remembers its window** | Position, size and maximised state, saved on a debounce and on exit |
 | **Start with Windows** | Optional, launches straight to the tray |
-| **Always on top** | Toggle from the title bar or the tray menu |
+| **Always on top** | Toggle from the tray menu, or the settings dialog |
 | **Full screen** | `F11`, and automatically when a camera card goes full screen |
 | **Stays on the dashboard** | Links that want a new window open in your real browser |
 | **Native notifications** | Home Assistant pushes over a websocket channel; action buttons report back as `mobile_app_notification_action` |
@@ -468,6 +468,13 @@ answers every HTTP request with `403`, which reads exactly like a revoked token.
 dialog carries a short version of this warning.
 
 ## Keyboard
+
+The title bar carries a single button, Settings. Back, Home, Reload and Always on
+top each had one too, and every one of them was reachable without it — the keys
+below, Home Assistant's own sidebar, and the tray menu — so a dashboard you keep
+on screen permanently is better off without the toolbar. Settings stays because on
+a fresh install it is needed before anything else works, and the tray icon may be
+sitting in the overflow.
 
 | Key | |
 |---|---|
