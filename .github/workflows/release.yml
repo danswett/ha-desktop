@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release, e.g. v1.0.0'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  NUGET_CONFIG: build/nuget.ci.config
+
+jobs:
+  release:
+    name: Build and publish the MSI
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # WiX 6 and later require accepting the Open Source Maintenance Fee EULA; 5 is the
+      # last release under the plain MS-RL.
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 5.0.2 --configfile '${{ env.NUGET_CONFIG }}'
+
+      - name: Add the WiX Util extension
+        run: wix extension add --global WixToolset.Util.wixext/5.0.2
+
+      # Supplies Microsoft.WindowsAppRuntime.Insights.Resource.dll, without which the
+      # installed app cannot raise a toast. Build-Installer.ps1 refuses to build if it
+      # is missing, so this step failing fails the release rather than shipping a
+      # silently broken MSI.
+      - name: Install the Windows App Runtime
+        shell: pwsh
+        run: ./build/Install-WindowsAppRuntime.ps1 -Version 2.5
+
+      - name: Build the installer
+        shell: pwsh
+        run: ./tools/Build-Installer.ps1 -NuGetConfig '${{ env.NUGET_CONFIG }}'
+
+      - name: Check the version matches the tag
+        shell: pwsh
+        run: |
+          $tag = '${{ github.event.inputs.tag || github.ref_name }}'
+          $expected = $tag.TrimStart('v')
+          $msi = Get-ChildItem dist -Filter '*.msi' | Select-Object -First 1
+          if (-not $msi) { throw 'No MSI was produced.' }
+          if ($msi.Name -notmatch [regex]::Escape($expected)) {
+            throw "Tag $tag does not match $($msi.Name). Update <Version> in the project before tagging."
+          }
+          Write-Host "$($msi.Name) ($([math]::Round($msi.Length / 1MB)) MB)"
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.event.inputs.tag || github.ref_name }}'
+          $msi = (Get-ChildItem dist -Filter '*.msi' | Select-Object -First 1).FullName
+          # Built as an array rather than a here-string: here-string content has to
+          # start at column 0, which would close this YAML block scalar early.
+          $notes = @(
+            'Per-user install. No administrator needed.'
+            ''
+            '```'
+            "msiexec /i $(Split-Path -Leaf $msi) /qb STARTWITHWINDOWS=1"
+            'pwsh -File Register-TickerTarget.ps1 -HaUrl http://<ha-address>:8123 -Token <token>'
+            '```'
+            ''
+            'Each machine registers under its own name, so every one gets its own'
+            'device_tracker, notify service and push channel.'
+          )
+          $notes | Set-Content release-notes.md -Encoding utf8
+          gh release create $tag $msi --title $tag --notes-file release-notes.md

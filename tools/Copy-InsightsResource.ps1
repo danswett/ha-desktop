@@ -29,6 +29,12 @@
     The RID being built, e.g. 'win-x64'. The framework package is installed once per
     architecture and all copies share a version, so without this filter an x86 DLL can
     win the tie and land beside an x64 app, where it will not load.
+
+.PARAMETER RequireVersionMatch
+    Fail rather than warn when no installed runtime matches Version. A resource DLL
+    from a different runtime may not load, and the symptom is the same silent loss of
+    toasts this script exists to prevent - so anything built to be handed to another
+    machine should set this.
 #>
 [CmdletBinding()]
 param(
@@ -37,7 +43,9 @@ param(
 
     [string]$Version,
 
-    [string]$RuntimeIdentifier = 'win-x64'
+    [string]$RuntimeIdentifier = 'win-x64',
+
+    [switch]$RequireVersionMatch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,7 +59,9 @@ if (-not (Test-Path -LiteralPath $TargetDirectory)) {
 
 $packages = @(Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.*' -ErrorAction SilentlyContinue)
 if ($packages.Count -eq 0) {
-    Write-Warning "No Windows App Runtime framework package is installed, so $fileName could not be found."
+    $message = "No Windows App Runtime framework package is installed, so $fileName could not be found."
+    if ($RequireVersionMatch) { throw $message }
+    Write-Warning $message
     Write-Warning 'Toast notifications will be unavailable. Install the Windows App Runtime to fix this.'
     exit 0
 }
@@ -65,7 +75,9 @@ $wanted = switch -Wildcard ($RuntimeIdentifier) {
 
 $matching = @($packages | Where-Object { $_.Architecture -eq $wanted })
 if ($matching.Count -eq 0) {
-    Write-Warning "No $wanted Windows App Runtime package is installed, so $fileName could not be found."
+    $message = "No $wanted Windows App Runtime package is installed, so $fileName could not be found."
+    if ($RequireVersionMatch) { throw $message }
+    Write-Warning $message
     Write-Warning 'Toast notifications will be unavailable.'
     exit 0
 }
@@ -92,13 +104,20 @@ foreach ($package in $ranked) {
 }
 
 if (-not $source) {
-    Write-Warning "$fileName was not found in any installed Windows App Runtime package."
+    $message = "$fileName was not found in any installed $wanted Windows App Runtime package."
+    if ($RequireVersionMatch) { throw $message }
+    Write-Warning $message
     Write-Warning 'Toast notifications will be unavailable.'
     exit 0
 }
 
+$mismatched = $Version -and $sourceVersion -notlike "$Version*"
+if ($mismatched -and $RequireVersionMatch) {
+    throw "The only $wanted Windows App Runtime available is $sourceVersion, which does not match SDK $Version. Install the matching runtime with build\Install-WindowsAppRuntime.ps1 -Version $Version."
+}
+
 Copy-Item -LiteralPath $source -Destination $destination -Force
-if ($Version -and $sourceVersion -notlike "$Version*") {
+if ($mismatched) {
     Write-Warning "  Copied $fileName from $wanted runtime $sourceVersion, which does not match SDK $Version."
 } else {
     Write-Host "  Copied $fileName from $wanted runtime $sourceVersion."

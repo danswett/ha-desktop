@@ -26,6 +26,15 @@
 .PARAMETER SkipPublish
     Reuse an existing publish folder instead of rebuilding it.
 
+.PARAMETER AllowMissingInsightsResource
+    Build even if Microsoft.WindowsAppRuntime.Insights.Resource.dll is absent. The
+    resulting MSI installs an app that cannot raise a single toast, so this exists only
+    for building on a machine where notifications are not wanted.
+
+.PARAMETER NuGetConfig
+    A NuGet config to restore with. The repo default points at the Microsoft package
+    proxy, which a hosted CI runner cannot reach; CI passes build/nuget.ci.config.
+
 .EXAMPLE
     pwsh -File tools\Build-Installer.ps1
 
@@ -37,7 +46,9 @@
 param(
     [string]$Configuration = 'Release',
     [string]$OutputDirectory,
-    [switch]$SkipPublish
+    [switch]$SkipPublish,
+    [switch]$AllowMissingInsightsResource,
+    [string]$NuGetConfig
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,7 +87,23 @@ Write-Host "Home Assistant Desktop $version" -ForegroundColor Cyan
 
 if (-not $SkipPublish) {
     Write-Host 'Publishing (self-contained, win-x64)...'
-    dotnet publish $project -c $Configuration -r win-x64 --self-contained true -o $publishDir --nologo
+    $publishArgs = @(
+        'publish', $project,
+        '-c', $Configuration,
+        '-r', 'win-x64',
+        '--self-contained', 'true',
+        '-o', $publishDir,
+        '--nologo'
+    )
+    if ($NuGetConfig) { $publishArgs += @('--configfile', $NuGetConfig) }
+
+    # This output is going to other machines, so a resource DLL from the wrong runtime
+    # must fail the build rather than silently cost every toast.
+    if (-not $AllowMissingInsightsResource) {
+        $publishArgs += '-p:RequireMatchingInsightsResource=true'
+    }
+
+    dotnet @publishArgs
     if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 }
 
@@ -84,11 +111,29 @@ if (-not (Test-Path (Join-Path $publishDir 'HomeAssistant.Desktop.exe'))) {
     throw "No published app at $publishDir. Run without -SkipPublish."
 }
 
-# Without this the app installs fine and then cannot raise a single toast.
+# Without this the app installs fine and then cannot raise a single toast. Fail rather
+# than warn: this script produces something meant to be handed to other machines, and
+# the failure it would otherwise ship is completely silent.
 $insights = Join-Path $publishDir 'Microsoft.WindowsAppRuntime.Insights.Resource.dll'
 if (-not (Test-Path $insights)) {
-    Write-Warning 'Microsoft.WindowsAppRuntime.Insights.Resource.dll is missing from the publish output.'
-    Write-Warning 'Toast notifications will not work. See tools/Copy-InsightsResource.ps1.'
+    $message = @'
+Microsoft.WindowsAppRuntime.Insights.Resource.dll is missing from the publish output.
+
+An MSI built without it installs an app whose toast notifications fail silently.
+The file comes from the installed Windows App Runtime framework package, which this
+machine appears not to have. Install it with:
+
+    pwsh -File build\Install-WindowsAppRuntime.ps1
+
+See tools/Copy-InsightsResource.ps1 and WindowsAppSDK issue 6774. To build anyway,
+pass -AllowMissingInsightsResource.
+'@
+    if ($AllowMissingInsightsResource) {
+        Write-Warning $message
+    }
+    else {
+        throw $message
+    }
 }
 
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
