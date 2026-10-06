@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using HomeAssistant.Desktop.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -34,14 +35,54 @@ public partial class App : Application
         var startMinimized = Settings.StartMinimized
             || _args.Any(a => string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase));
 
+        var request = LaunchRequest.Parse(_args);
+
+        // A jump list entry that only acts on an entity should not drag the window up,
+        // so a launch carrying one starts hidden even if it would otherwise not.
+        if (request.Kind == LaunchRequestKind.PerformOnEntity)
+        {
+            startMinimized = true;
+        }
+
         _window = new MainWindow(Settings, startMinimized);
         _window.Start();
+        _window.Handle(request);
     }
 
     /// <summary>A second launch arrives here instead of starting another process.</summary>
     private void OnInstanceActivated(object? sender, AppActivationArguments e)
     {
-        _dispatcherQueue.TryEnqueue(() => _window?.ShowAndFocus());
+        var request = ReadRequest(e);
+
+        _dispatcherQueue.TryEnqueue(() =>
+        {
+            // Acting on an entity is not a reason to interrupt whatever is on screen.
+            if (request.Kind != LaunchRequestKind.PerformOnEntity)
+            {
+                _window?.ShowAndFocus();
+            }
+
+            _window?.Handle(request);
+        });
+    }
+
+    private static LaunchRequest ReadRequest(AppActivationArguments e)
+    {
+        try
+        {
+            // Activation reports the command line as a single string, executable and
+            // all, rather than the argv this process was started with.
+            if (e.Data is Windows.ApplicationModel.Activation.ILaunchActivatedEventArgs launch)
+            {
+                return LaunchRequest.Parse(LaunchRequest.Split(launch.Arguments ?? string.Empty));
+            }
+        }
+        catch (Exception ex) when (ex is InvalidCastException or COMException)
+        {
+            // An activation this app does not understand is not worth failing over.
+        }
+
+        return LaunchRequest.None;
     }
 
     private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)

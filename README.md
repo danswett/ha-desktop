@@ -368,6 +368,38 @@ Two details are load-bearing:
 Only `hasSettingsScreen` is advertised. The frontend asks follow-up questions only
 about capabilities the app claims, so the list is kept honest rather than aspirational.
 
+### Taskbar jump list
+
+Right-clicking the app on the taskbar can carry up to ten entries of your own, each
+pointing at a dashboard, a view, or a single entity. Configured under **Taskbar** in
+Settings, which offers your real dashboards and entities to pick from — read over the
+dashboard's own websocket, so it needs no second connection and can only offer what
+the signed-in account can reach.
+
+An entity entry does one of two things, chosen per entry:
+
+| | |
+|---|---|
+| **Open it** | Brings the window up with that entity's dialog showing |
+| **Toggle it** | Calls `homeassistant.toggle` and leaves the window alone |
+
+Two details are less obvious than they look.
+
+There is no URL that opens an entity. `/_my_redirect/more_info` answers `200`, but so
+does every other frontend path, and `more_info` is not in the redirect table at all.
+The frontend's own route in is a `hass-more-info` event — and that event is one-shot,
+silently dropped if it arrives before the shell has attached its listener, which is
+exactly the race a cold launch creates. Home Assistant's own end-to-end tests solve
+this by dispatching repeatedly until the dialog appears, and so does this.
+
+Toggling does not involve the page at all. It is a REST call with the app's own
+credentials, so it still works when the app was launched purely to do that one thing
+and the dashboard has not loaded.
+
+The list is published through the Win32 `ICustomDestinationList`. The modern
+`Windows.UI.StartScreen.JumpList` needs package identity, which an unpackaged app does
+not have.
+
 ## Requirements
 
 - Windows 10 1903 / Windows 11
