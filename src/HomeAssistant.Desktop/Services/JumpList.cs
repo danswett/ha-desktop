@@ -34,6 +34,12 @@ public sealed class JumpListSlot
 
     public JumpTargetAction Action { get; set; } = JumpTargetAction.Open;
 
+    /// <summary>
+    /// Which icon to draw, for the thumbnail toolbar. Ignored by the jump list, which
+    /// shows text and takes its icon from the executable.
+    /// </summary>
+    public string Glyph { get; set; } = string.Empty;
+
     public bool IsUsable =>
         !string.IsNullOrWhiteSpace(Title) && !string.IsNullOrWhiteSpace(Target);
 

@@ -20,6 +20,8 @@ internal sealed class JumpListEditor
     private readonly Button _add;
     private readonly TextBlock _count;
     private readonly TextBlock _status;
+    private readonly bool _withGlyphs;
+    private readonly int _maxRows;
 
     /// <summary>
     /// What the rows offer as suggestions. Settable because the dashboard is asked for
@@ -28,8 +30,11 @@ internal sealed class JumpListEditor
     /// </summary>
     internal HaCatalogue Catalogue { get; set; } = new();
 
-    internal JumpListEditor(IEnumerable<JumpListSlot> existing)
+    internal JumpListEditor(IEnumerable<JumpListSlot> existing, bool withGlyphs = false, int maxRows = JumpList.MaxSlots)
     {
+        _withGlyphs = withGlyphs;
+        _maxRows = maxRows;
+
         _add = new Button { Content = "Add an entry", Margin = new Thickness(0, 12, 0, 0) };
         _add.Click += (_, _) => AddRow(new JumpListSlot());
 
@@ -94,12 +99,12 @@ internal sealed class JumpListEditor
 
     private void AddRow(JumpListSlot slot)
     {
-        if (_rows.Count >= JumpList.MaxSlots)
+        if (_rows.Count >= _maxRows)
         {
             return;
         }
 
-        var row = new Row(slot, () => Catalogue);
+        var row = new Row(slot, () => Catalogue, _withGlyphs);
         row.RemoveRequested += () =>
         {
             _rows.Remove(row);
@@ -114,10 +119,10 @@ internal sealed class JumpListEditor
 
     private void UpdateCount()
     {
-        _add.IsEnabled = _rows.Count < JumpList.MaxSlots;
-        _count.Text = _rows.Count >= JumpList.MaxSlots
-            ? $"Windows shows at most {JumpList.MaxSlots} entries, which is as many as there are."
-            : $"{_rows.Count} of {JumpList.MaxSlots} entries.";
+        _add.IsEnabled = _rows.Count < _maxRows;
+        _count.Text = _rows.Count >= _maxRows
+            ? $"Windows shows at most {_maxRows} entries, which is as many as there are."
+            : $"{_rows.Count} of {_maxRows} entries.";
     }
 
     private static JumpListSlot Clone(JumpListSlot slot) => new()
@@ -126,6 +131,7 @@ internal sealed class JumpListEditor
         Kind = slot.Kind,
         Target = slot.Target,
         Action = slot.Action,
+        Glyph = slot.Glyph,
     };
 
     private sealed class Row
@@ -134,13 +140,14 @@ internal sealed class JumpListEditor
         private readonly ComboBox _kind;
         private readonly AutoSuggestBox _target;
         private readonly ComboBox _action;
+        private readonly ComboBox? _glyph;
         private readonly Func<HaCatalogue> _catalogue;
 
         internal event Action? RemoveRequested;
 
         internal Grid Element { get; }
 
-        internal Row(JumpListSlot slot, Func<HaCatalogue> catalogue)
+        internal Row(JumpListSlot slot, Func<HaCatalogue> catalogue, bool withGlyphs)
         {
             _catalogue = catalogue;
 
@@ -197,8 +204,36 @@ internal sealed class JumpListEditor
             ToolTipService.SetToolTip(remove, "Remove this entry");
             remove.Click += (_, _) => RemoveRequested?.Invoke();
 
+            // A thumbnail button shows no text at all, so its icon has to be chosen.
+            if (withGlyphs)
+            {
+                _glyph = new ComboBox
+                {
+                    MinWidth = 64,
+                    FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe Fluent Icons"),
+                };
+
+                foreach (var (name, g) in GlyphIcon.Palette)
+                {
+                    var item = new ComboBoxItem
+                    {
+                        Content = g,
+                        Tag = g,
+                        FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe Fluent Icons"),
+                    };
+                    ToolTipService.SetToolTip(item, name);
+                    AutomationProperties.SetName(item, name);
+                    _glyph.Items.Add(item);
+                }
+
+                var index = GlyphIcon.Palette.ToList().FindIndex(p => p.Glyph == slot.Glyph);
+                _glyph.SelectedIndex = index >= 0 ? index : 0;
+                AutomationProperties.SetName(_glyph, "Entry icon");
+            }
+
             Element = new Grid { ColumnSpacing = 8 };
-            for (var i = 0; i < 5; i++)
+            var columns = withGlyphs ? 6 : 5;
+            for (var i = 0; i < columns; i++)
             {
                 Element.ColumnDefinitions.Add(new ColumnDefinition
                 {
@@ -215,7 +250,16 @@ internal sealed class JumpListEditor
             Add(_kind, 1);
             Add(_target, 2);
             Add(_action, 3);
-            Add(remove, 4);
+
+            if (_glyph is not null)
+            {
+                Add(_glyph, 4);
+                Add(remove, 5);
+            }
+            else
+            {
+                Add(remove, 4);
+            }
         }
 
         private void Add(FrameworkElement element, int column)
@@ -260,6 +304,8 @@ internal sealed class JumpListEditor
             Kind = _kind.SelectedIndex == 1 ? JumpTargetKind.Entity : JumpTargetKind.Page,
             Target = (_target.Text ?? string.Empty).Trim(),
             Action = _action.SelectedIndex == 1 ? JumpTargetAction.Perform : JumpTargetAction.Open,
+            Glyph = (_glyph?.SelectedItem as ComboBoxItem)?.Tag as string ?? string.Empty,
         };
     }
 }
+

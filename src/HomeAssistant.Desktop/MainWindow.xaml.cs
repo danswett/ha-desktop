@@ -87,6 +87,7 @@ public sealed partial class MainWindow : Window
     private HaAuth? _auth;
     private HaEndpoints? _endpoints;
     private ExternalAppBridge? _bridge;
+    private ThumbnailToolbar? _thumbBar;
     private bool _locked;
     private string? _pendingPath;
     private string? _pendingEntity;
@@ -432,6 +433,12 @@ public sealed partial class MainWindow : Window
         UpdateSettingsButtonVisibility();
         PublishJumpList();
 
+        // Subclasses the window, so it must come after the handle exists and before the
+        // shell announces the taskbar button.
+        _thumbBar = new ThumbnailToolbar(_hwnd);
+        _thumbBar.Invoked += slot => DispatcherQueue.TryEnqueue(() => Handle(ToRequest(slot)));
+        _thumbBar.SetButtons(_settings.ThumbButtons);
+
         // Raised before the window is shown, so the dashboard is never briefly visible
         // behind it. The browser still starts underneath: notifications and the unread
         // count are the reason the app is running, and holding those back would make a
@@ -605,6 +612,19 @@ public sealed partial class MainWindow : Window
 
     private void PublishJumpList() =>
         JumpList.Publish(_settings.JumpListSlots, Environment.ProcessPath ?? string.Empty);
+
+    /// <summary>
+    /// A configured shortcut, expressed as the launch it stands for. The same handling
+    /// then serves the jump list, which arrives as a command line, and the thumbnail
+    /// buttons, which arrive as a window message.
+    /// </summary>
+    private static LaunchRequest ToRequest(JumpListSlot slot) => slot.Kind switch
+    {
+        JumpTargetKind.Entity when slot.Action == JumpTargetAction.Perform =>
+            new LaunchRequest(LaunchRequestKind.PerformOnEntity, slot.Target),
+        JumpTargetKind.Entity => new LaunchRequest(LaunchRequestKind.ShowEntity, slot.Target),
+        _ => new LaunchRequest(LaunchRequestKind.OpenPage, slot.Target),
+    };
 
     private void ConfigureWindow()
     {
@@ -1473,6 +1493,8 @@ public sealed partial class MainWindow : Window
         _systemWatcher = null;
         _endpoints?.Dispose();
         _endpoints = null;
+        _thumbBar?.Dispose();
+        _thumbBar = null;
         _ = _pushClient?.DisposeAsync().AsTask();
         _pushClient = null;
         _toasts?.Dispose();
@@ -1726,7 +1748,7 @@ public sealed partial class MainWindow : Window
     /// Done when the section is first opened rather than when the dialog is built, so
     /// opening Settings does not wait on a websocket round trip for every user.
     /// </summary>
-    private async Task LoadCatalogueAsync(JumpListEditor editor)
+    private async Task LoadCatalogueAsync(params JumpListEditor[] editors)
     {
         try
         {
@@ -1734,14 +1756,14 @@ public sealed partial class MainWindow : Window
                 ? HaCatalogue.From(answer)
                 : new HaCatalogue();
 
-            editor.SetCatalogue(catalogue);
+            foreach (var editor in editors) { editor.SetCatalogue(catalogue); }
             Log.Info("jumplist", $"catalogue: {catalogue.Pages.Count} page(s), {catalogue.Entities.Count} entities");
         }
         catch (Exception ex)
         {
             // An editor without suggestions still works by hand, and a failure here
             // must not escape into the dispatcher.
-            editor.SetCatalogue(new HaCatalogue());
+            foreach (var editor in editors) { editor.SetCatalogue(new HaCatalogue()); }
             Log.Warn("jumplist", $"could not read the catalogue: {ex.Message}");
         }
     }
@@ -1871,6 +1893,8 @@ public sealed partial class MainWindow : Window
             openFolder.Click += (_, _) => OpenDataFolder();
 
             var jumpEditor = new JumpListEditor(_settings.JumpListSlots);
+            var thumbEditor = new JumpListEditor(
+                _settings.ThumbButtons, withGlyphs: true, maxRows: ThumbnailToolbar.MaxButtons);
             var jumpSection = new Expander
             {
                 Header = "Taskbar jump list",
@@ -1892,7 +1916,26 @@ public sealed partial class MainWindow : Window
                 }
 
                 catalogueRequested = true;
-                _ = LoadCatalogueAsync(jumpEditor);
+                _ = LoadCatalogueAsync(jumpEditor, thumbEditor);
+            };
+
+            var thumbSection = new Expander
+            {
+                Header = "Thumbnail buttons",
+                Margin = new Thickness(0, 8, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Content = thumbEditor.Build(),
+            };
+            thumbSection.Expanding += (_, _) =>
+            {
+                if (catalogueRequested)
+                {
+                    return;
+                }
+
+                catalogueRequested = true;
+                _ = LoadCatalogueAsync(jumpEditor, thumbEditor);
             };
 
             // Wide enough for a jump list row to hold a name, a target and two choices
@@ -1920,6 +1963,7 @@ public sealed partial class MainWindow : Window
 
             panel.Children.Add(SectionHeader("Taskbar"));
             panel.Children.Add(jumpSection);
+            panel.Children.Add(thumbSection);
 
             panel.Children.Add(SectionHeader("Advanced"));
             panel.Children.Add(requireHello.Row);
@@ -1966,8 +2010,10 @@ public sealed partial class MainWindow : Window
             _settings.DevToolsEnabled = devTools.Toggle.IsOn;
             _settings.RequireWindowsHello = requireHello.Toggle.IsOn;
             _settings.JumpListSlots = jumpEditor.Result();
+            _settings.ThumbButtons = thumbEditor.Result();
             _settings.Save();
             PublishJumpList();
+            _thumbBar?.SetButtons(_settings.ThumbButtons);
 
             StartupManager.SetEnabled(startWithWindows.Toggle.IsOn);
             SetAlwaysOnTop(alwaysOnTop.Toggle.IsOn);
@@ -2093,3 +2139,7 @@ public sealed partial class MainWindow : Window
         }
     }
 }
+
+
+
+
