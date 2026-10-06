@@ -400,6 +400,24 @@ The list is published through the Win32 `ICustomDestinationList`. The modern
 `Windows.UI.StartScreen.JumpList` needs package identity, which an unpackaged app does
 not have.
 
+### Thumbnail toolbar buttons
+
+Hovering the taskbar button shows a preview of the window with up to seven buttons
+beneath it, configured the same way as the jump list and pointing at the same three
+kinds of thing. Each one also carries an icon, picked from a short palette of Segoe
+Fluent glyphs, because the shell shows no text — the title becomes the tooltip.
+
+The shell will accept buttons for a window exactly once, and only after it has sent
+`TaskbarButtonCreated`, which it re-sends if Explorer restarts. So all seven are
+registered the moment that message arrives, and the ones you have not configured are
+registered hidden; changing the set later updates those same seven in place. Clicks
+come back as `WM_COMMAND` on the main window, which means subclassing it.
+
+The glyph palette was checked rather than assumed. Ink coverage cannot tell a real
+glyph from tofu, since a missing codepoint still draws something; `GetGlyphIndicesW`
+with `GGI_MARK_NONEXISTING_GLYPHS` can, and it reported one of the candidates absent
+from the shipped font.
+
 ## Requirements
 
 - Windows 10 1903 / Windows 11

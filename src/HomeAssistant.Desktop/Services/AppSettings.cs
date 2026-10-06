@@ -71,6 +71,12 @@ public sealed class AppSettings
     public List<JumpListSlot> JumpListSlots { get; set; } = [];
 
     /// <summary>
+    /// Buttons under the taskbar thumbnail. Same shape as a jump list entry, plus the
+    /// icon: these show no text, so the icon and the tooltip are all there is.
+    /// </summary>
+    public List<JumpListSlot> ThumbButtons { get; set; } = [];
+
+    /// <summary>
     /// Written by tools/Register-TickerTarget.ps1. Identifies this machine's mobile_app
     /// registration so the push channel can be opened. Not a credential on its own - the
     /// channel also requires an authenticated websocket.
