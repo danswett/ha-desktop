@@ -256,6 +256,17 @@ Invoke-RestMethod -Method Post -Uri "$ha/api/services/notify/mobile_app_dswett_h
     -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json' -Body $body
 ```
 
+To check the action buttons specifically:
+
+```powershell
+pwsh -File tools\Test-ToastAction.ps1
+```
+
+That sends a toast and waits for the press to come back as
+`mobile_app_notification_action`. The press has to be a real one — Windows renders
+toasts in an isolated accessibility tree that an ordinary process cannot traverse or
+click, so this is the one step that cannot be automated.
+
 `%LOCALAPPDATA%\HomeAssistantDesktop\app.log` records registration, channel state, and
 every toast. None of this has a UI, so the log is the only way to tell working from
 quietly broken.
