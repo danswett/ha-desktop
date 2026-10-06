@@ -56,6 +56,15 @@ public sealed class AppSettings
     public bool DevToolsEnabled { get; set; }
 
     /// <summary>
+    /// Ask for Windows Hello before showing the dashboard at launch.
+    ///
+    /// Not a security boundary - the refresh token is DPAPI-protected and therefore
+    /// readable by anything already running as this user. This covers the case it
+    /// says it does: an unattended, unlocked machine with the house on screen.
+    /// </summary>
+    public bool RequireWindowsHello { get; set; }
+
+    /// <summary>
     /// Written by tools/Register-TickerTarget.ps1. Identifies this machine's mobile_app
     /// registration so the push channel can be opened. Not a credential on its own - the
     /// channel also requires an authenticated websocket.

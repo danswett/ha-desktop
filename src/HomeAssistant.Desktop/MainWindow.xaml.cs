@@ -84,6 +84,7 @@ public sealed partial class MainWindow : Window
     private HaAuth? _auth;
     private HaEndpoints? _endpoints;
     private ExternalAppBridge? _bridge;
+    private bool _locked;
     private string? _credentialSource;
     private CoreWebView2Environment? _webViewEnvironment;
     private bool _signInInProgress;
@@ -391,6 +392,15 @@ public sealed partial class MainWindow : Window
             ApplyDefaultPlacement();
         }
 
+        // Raised before the window is shown, so the dashboard is never briefly visible
+        // behind it. The browser still starts underneath: notifications and the unread
+        // count are the reason the app is running, and holding those back would make a
+        // locked app useless rather than private.
+        if (_settings.RequireWindowsHello)
+        {
+            ShowLock("Verify with Windows Hello to show your dashboard.");
+        }
+
         if (_startMinimized)
         {
             // Activate first so XAML completes layout, then drop straight to the tray.
@@ -403,7 +413,67 @@ public sealed partial class MainWindow : Window
         }
 
         _ = InitializeWebViewAsync();
+
+        if (_settings.RequireWindowsHello)
+        {
+            _ = UnlockAsync();
+        }
     }
+
+    private void ShowLock(string detail)
+    {
+        _locked = true;
+        LockDetail.Text = detail;
+        LockOverlay.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Asks for verification and reveals the dashboard once it succeeds. Left on the
+    /// lock screen otherwise, so a refusal is recoverable without restarting.
+    /// </summary>
+    private async Task UnlockAsync()
+    {
+        if (!_locked)
+        {
+            return;
+        }
+
+        UnlockButton.IsEnabled = false;
+        try
+        {
+            var outcome = await WindowsHello.VerifyAsync(_hwnd, "Unlock Home Assistant");
+
+            switch (outcome)
+            {
+                case HelloOutcome.Verified:
+                    _locked = false;
+                    LockOverlay.Visibility = Visibility.Collapsed;
+                    Log.Info("hello", "unlocked");
+                    break;
+
+                case HelloOutcome.Unavailable:
+                    // The setting can only be turned on after a successful check, so
+                    // getting here means Hello was removed afterwards. Refusing to open
+                    // would strand the user with no way back in, so say so and open.
+                    _locked = false;
+                    LockOverlay.Visibility = Visibility.Collapsed;
+                    Log.Warn("hello", "Windows Hello is no longer available; opening unlocked");
+                    break;
+
+                default:
+                    LockDetail.Text = "Not verified. Try again, or exit.";
+                    break;
+            }
+        }
+        finally
+        {
+            UnlockButton.IsEnabled = true;
+        }
+    }
+
+    private void OnUnlockClick(object sender, RoutedEventArgs e) => _ = UnlockAsync();
+
+    private void OnLockExitClick(object sender, RoutedEventArgs e) => Exit();
 
     private void ConfigureWindow()
     {
@@ -1410,6 +1480,46 @@ public sealed partial class MainWindow : Window
             var startWithWindows = MakeToggleRow("Start with Windows", StartupManager.IsEnabled());
             var devTools = MakeToggleRow("Developer tools and context menu", _settings.DevToolsEnabled);
 
+            // Verified before it can be switched on, so that turning on a lock can
+            // never be the thing that locks you out of your own dashboard.
+            var requireHello = MakeToggleRow("Require Windows Hello to unlock", _settings.RequireWindowsHello);
+            var helloHint = Hint(
+                "Asked for once, at launch. This is a screen lock, not a vault: the app's "
+                + "credentials are protected by Windows for your account either way.");
+            requireHello.Toggle.Toggled += async (_, _) =>
+            {
+                if (!requireHello.Toggle.IsOn)
+                {
+                    return;
+                }
+
+                requireHello.Toggle.IsEnabled = false;
+                try
+                {
+                    if (!await WindowsHello.IsAvailableAsync())
+                    {
+                        requireHello.Toggle.IsOn = false;
+                        helloHint.Text = "Windows Hello is not set up on this machine. "
+                            + "Add a PIN or a biometric sign-in in Windows Settings first.";
+                        return;
+                    }
+
+                    if (await WindowsHello.VerifyAsync(_hwnd, "Confirm you can unlock Home Assistant")
+                        != HelloOutcome.Verified)
+                    {
+                        requireHello.Toggle.IsOn = false;
+                        helloHint.Text = "Not verified, so the lock has been left off.";
+                        return;
+                    }
+
+                    helloHint.Text = "You will be asked for this the next time the app starts.";
+                }
+                finally
+                {
+                    requireHello.Toggle.IsEnabled = true;
+                }
+            };
+
             var openFolder = new HyperlinkButton
             {
                 Content = "Open the app's data folder",
@@ -1440,6 +1550,8 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(startWithWindows.Row);
 
             panel.Children.Add(SectionHeader("Advanced"));
+            panel.Children.Add(requireHello.Row);
+            panel.Children.Add(helloHint);
             panel.Children.Add(devTools.Row);
             panel.Children.Add(openFolder);
 
@@ -1480,6 +1592,7 @@ public sealed partial class MainWindow : Window
             _settings.MinimizeToTray = minimizeToTray.Toggle.IsOn;
             _settings.StartMinimized = startMinimized.Toggle.IsOn;
             _settings.DevToolsEnabled = devTools.Toggle.IsOn;
+            _settings.RequireWindowsHello = requireHello.Toggle.IsOn;
             _settings.Save();
 
             StartupManager.SetEnabled(startWithWindows.Toggle.IsOn);
