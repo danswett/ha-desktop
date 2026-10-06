@@ -41,18 +41,19 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Before the build, not after: Windows App SDK's self-contained output omits this
+      # file and no package carries it, so a runner without the matching framework
+      # package produces an app whose toasts fail silently. Runners ship some other
+      # version already, so installing the right one is not optional.
+      - name: Install the Windows App Runtime
+        shell: pwsh
+        run: ./build/Install-WindowsAppRuntime.ps1 -Version 2.5
+
       - name: Restore
         run: dotnet restore src/HomeAssistant.Desktop/HomeAssistant.Desktop.csproj --configfile '${{ env.NUGET_CONFIG }}'
 
       - name: Build
         run: dotnet build src/HomeAssistant.Desktop/HomeAssistant.Desktop.csproj -c Release --no-restore
-
-      # Windows App SDK's self-contained output omits this file and no package carries
-      # it, so a runner without the framework package installed produces an app whose
-      # toasts fail silently. Install it here so the check below is meaningful.
-      - name: Install the Windows App Runtime
-        shell: pwsh
-        run: ./build/Install-WindowsAppRuntime.ps1 -Version 2.5
 
       - name: Publish
         run: dotnet publish src/HomeAssistant.Desktop/HomeAssistant.Desktop.csproj -c Release -r win-x64 --self-contained true -o publish --configfile '${{ env.NUGET_CONFIG }}' -p:RequireMatchingInsightsResource=true
