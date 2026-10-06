@@ -411,8 +411,6 @@ public sealed partial class MainWindow : Window
             presenter.IsAlwaysOnTop = _settings.AlwaysOnTop;
         }
 
-        UpdatePinIcon();
-
         if (File.Exists(_iconPath))
         {
             _appWindow.SetIcon(_iconPath);
@@ -753,7 +751,6 @@ public sealed partial class MainWindow : Window
         core.DocumentTitleChanged += OnDocumentTitleChanged;
         core.ContainsFullScreenElementChanged += OnContainsFullScreenElementChanged;
         core.WebMessageReceived += OnWebMessageReceived;
-        core.HistoryChanged += OnHistoryChanged;
     }
 
     private void Navigate(string url)
@@ -883,11 +880,6 @@ public sealed partial class MainWindow : Window
         Title = _documentTitle;
 
         _tray?.UpdateTooltip(_documentTitle);
-    }
-
-    private void OnHistoryChanged(CoreWebView2 sender, object args)
-    {
-        BackButton.IsEnabled = sender.CanGoBack;
     }
 
     private void OnContainsFullScreenElementChanged(CoreWebView2 sender, object args)
@@ -1072,7 +1064,6 @@ public sealed partial class MainWindow : Window
                 core.DocumentTitleChanged -= OnDocumentTitleChanged;
                 core.ContainsFullScreenElementChanged -= OnContainsFullScreenElementChanged;
                 core.WebMessageReceived -= OnWebMessageReceived;
-                core.HistoryChanged -= OnHistoryChanged;
             }
 
             WebViewHost.Children.Clear();
@@ -1185,29 +1176,7 @@ public sealed partial class MainWindow : Window
         {
             presenter.IsAlwaysOnTop = value;
         }
-
-        UpdatePinIcon();
     }
-
-    private void UpdatePinIcon()
-    {
-        // E718 is the outline pin, E77A the filled one.
-        PinIcon.Glyph = _settings.AlwaysOnTop ? "\uE77A" : "\uE718";
-    }
-
-    private void OnBackClick(object sender, RoutedEventArgs e)
-    {
-        if (_webView?.CoreWebView2 is { CanGoBack: true } core)
-        {
-            core.GoBack();
-        }
-    }
-
-    private void OnHomeClick(object sender, RoutedEventArgs e) => Navigate(BaseUrl);
-
-    private void OnReloadClick(object sender, RoutedEventArgs e) => ReloadNow();
-
-    private void OnPinClick(object sender, RoutedEventArgs e) => SetAlwaysOnTop(!_settings.AlwaysOnTop);
 
     private void OnRetryClick(object sender, RoutedEventArgs e)
     {

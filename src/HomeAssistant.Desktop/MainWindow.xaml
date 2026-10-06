@@ -51,22 +51,12 @@
                         VerticalAlignment="Center"
                         Spacing="2"
                         Padding="0,0,8,0">
-                <Button x:Name="BackButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Back"
-                        ToolTipService.ToolTip="Back" Click="OnBackClick" IsEnabled="False">
-                    <FontIcon Glyph="&#xE72B;" FontSize="13" />
-                </Button>
-                <Button x:Name="HomeButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Home"
-                        ToolTipService.ToolTip="Home" Click="OnHomeClick">
-                    <FontIcon Glyph="&#xE80F;" FontSize="13" />
-                </Button>
-                <Button x:Name="ReloadButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Reload"
-                        ToolTipService.ToolTip="Reload (F5)" Click="OnReloadClick">
-                    <FontIcon Glyph="&#xE72C;" FontSize="13" />
-                </Button>
-                <Button x:Name="PinButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Always on top"
-                        ToolTipService.ToolTip="Always on top" Click="OnPinClick">
-                    <FontIcon x:Name="PinIcon" Glyph="&#xE718;" FontSize="13" />
-                </Button>
+                <!-- Settings alone. Back, Home, Reload and Always on top were all
+                     reachable without a button - Alt+Left and the mouse's back button,
+                     Home Assistant's own sidebar, F5, and the tray menu - and a
+                     permanently visible dashboard is better off without the toolbar.
+                     Settings stays because on a fresh install it is needed before
+                     anything works, and the tray icon may be hidden in the overflow. -->
                 <Button x:Name="SettingsButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Settings"
                         ToolTipService.ToolTip="Settings" Click="OnSettingsClick">
                     <FontIcon Glyph="&#xE713;" FontSize="13" />
