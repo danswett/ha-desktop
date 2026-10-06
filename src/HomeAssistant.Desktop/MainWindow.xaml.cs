@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Microsoft.UI.Input;
+using VirtualKey = Windows.System.VirtualKey;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -87,7 +90,9 @@ public sealed partial class MainWindow : Window
     private HaAuth? _auth;
     private HaEndpoints? _endpoints;
     private ExternalAppBridge? _bridge;
+    private WindowMessages? _windowMessages;
     private ThumbnailToolbar? _thumbBar;
+    private GlobalHotkey? _hotkey;
     private bool _locked;
     private string? _pendingPath;
     private string? _pendingEntity;
@@ -433,11 +438,20 @@ public sealed partial class MainWindow : Window
         UpdateSettingsButtonVisibility();
         PublishJumpList();
 
-        // Subclasses the window, so it must come after the handle exists and before the
-        // shell announces the taskbar button.
-        _thumbBar = new ThumbnailToolbar(_hwnd);
+        // One subclass, shared: see WindowMessages. It must be in place before the shell
+        // announces the taskbar button.
+        _windowMessages = new WindowMessages(_hwnd);
+
+        _thumbBar = new ThumbnailToolbar(_hwnd, _windowMessages);
         _thumbBar.Invoked += slot => DispatcherQueue.TryEnqueue(() => Handle(ToRequest(slot)));
         _thumbBar.SetButtons(_settings.ThumbButtons);
+
+
+        _hotkey = new GlobalHotkey(_hwnd, _windowMessages);
+
+        _hotkey.Pressed += () => DispatcherQueue.TryEnqueue(SummonOrHide);
+
+        _hotkey.Set(_settings.Hotkey);
 
         // Raised before the window is shown, so the dashboard is never briefly visible
         // behind it. The browser still starts underneath: notifications and the unread
@@ -1446,7 +1460,25 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// What the global hotkey does. Unlike the tray icon's toggle, a window that is
+    /// showing but buried is brought forward rather than hidden - pressing a summon
+    /// key should never be the thing that makes the window disappear.
+    /// </summary>
+    private void SummonOrHide()
+    {
+        if (IsWindowShowing() && GetForegroundWindow() == _hwnd)
+        {
+            HideToTray();
+        }
+        else
+        {
+            ShowAndFocus();
+        }
+    }
+
     private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+
     {
         if (args.DidSizeChange || args.DidPositionChange)
         {
@@ -1493,8 +1525,14 @@ public sealed partial class MainWindow : Window
         _systemWatcher = null;
         _endpoints?.Dispose();
         _endpoints = null;
+        _hotkey?.Dispose();
+        _hotkey = null;
+
         _thumbBar?.Dispose();
         _thumbBar = null;
+
+        _windowMessages?.Dispose();
+        _windowMessages = null;
         _ = _pushClient?.DisposeAsync().AsTask();
         _pushClient = null;
         _toasts?.Dispose();
@@ -1938,6 +1976,75 @@ public sealed partial class MainWindow : Window
                 _ = LoadCatalogueAsync(jumpEditor, thumbEditor);
             };
 
+            // Validated by actually registering it: Windows is the only authority on
+            // whether a combination is free, and a hotkey that silently does nothing
+            // would be worse than none. The old binding goes back on if the dialog is
+            // cancelled.
+            var hotkey = _settings.Hotkey.Clone();
+
+            var hotkeyBox = new TextBox
+            {
+                IsReadOnly = true,
+                Width = 240,
+                Text = hotkey.ToString(),
+                PlaceholderText = "Click here, then press the keys",
+            };
+
+            var hotkeyStatus = new InfoBar
+            {
+                IsOpen = false,
+                IsClosable = false,
+                Severity = InfoBarSeverity.Warning,
+                Margin = new Thickness(0, 6, 0, 0),
+            };
+
+            hotkeyBox.KeyDown += (_, e) =>
+            {
+                e.Handled = true;
+
+                if (e.Key is VirtualKey.Control or VirtualKey.Shift or VirtualKey.Menu
+                    or VirtualKey.LeftWindows or VirtualKey.RightWindows)
+                {
+                    return;
+                }
+
+                HotkeyBinding candidate;
+                if (e.Key is VirtualKey.Escape or VirtualKey.Back or VirtualKey.Delete)
+                {
+                    candidate = new HotkeyBinding();
+                }
+                else
+                {
+                    candidate = new HotkeyBinding
+                    {
+                        Control = IsHeld(VirtualKey.Control),
+                        Alt = IsHeld(VirtualKey.Menu),
+                        Shift = IsHeld(VirtualKey.Shift),
+                        Win = IsHeld(VirtualKey.LeftWindows) || IsHeld(VirtualKey.RightWindows),
+                        Key = (uint)e.Key,
+                    };
+
+                    if (!candidate.IsUsable)
+                    {
+                        hotkeyStatus.Message = "Hold Ctrl, Alt, Shift or the Windows key as well.";
+                        hotkeyStatus.IsOpen = true;
+                        return;
+                    }
+                }
+
+                if (_hotkey?.Set(candidate) == false)
+                {
+                    hotkeyStatus.Message = $"{candidate} is already in use by another program.";
+                    hotkeyStatus.IsOpen = true;
+                    _hotkey.Set(hotkey);
+                    return;
+                }
+
+                hotkey = candidate;
+                hotkeyBox.Text = hotkey.ToString();
+                hotkeyStatus.IsOpen = false;
+            };
+
             // Wide enough for a jump list row to hold a name, a target and two choices
             // without wrapping.
             var panel = new StackPanel { Width = 600 };
@@ -1960,6 +2067,11 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(startMinimized.Row);
             panel.Children.Add(alwaysOnTop.Row);
             panel.Children.Add(startWithWindows.Row);
+            panel.Children.Add(LabelledRow("Global hotkey", hotkeyBox));
+            panel.Children.Add(hotkeyStatus);
+            panel.Children.Add(Hint(
+                "Brings the window up from anywhere, and puts it away again when it is already "
+                + "in front. Press Esc in the box to unset it."));
 
             panel.Children.Add(SectionHeader("Taskbar"));
             panel.Children.Add(jumpSection);
@@ -1995,6 +2107,8 @@ public sealed partial class MainWindow : Window
 
             if (await dialog.ShowAsync() != ContentDialogResult.Primary)
             {
+                // The picker binds as you press, so cancelling has to put it back.
+                _hotkey?.Set(_settings.Hotkey);
                 return;
             }
 
@@ -2011,6 +2125,7 @@ public sealed partial class MainWindow : Window
             _settings.RequireWindowsHello = requireHello.Toggle.IsOn;
             _settings.JumpListSlots = jumpEditor.Result();
             _settings.ThumbButtons = thumbEditor.Result();
+            _settings.Hotkey = hotkey;
             _settings.Save();
             PublishJumpList();
             _thumbBar?.SetButtons(_settings.ThumbButtons);
@@ -2126,6 +2241,39 @@ public sealed partial class MainWindow : Window
         return (row, toggle);
     }
 
+    /// <summary>The same shape as a toggle row, for a control that is not a toggle.</summary>
+    private static Grid LabelledRow(string label, FrameworkElement control)
+    {
+        control.HorizontalAlignment = HorizontalAlignment.Right;
+        control.VerticalAlignment = VerticalAlignment.Center;
+        AutomationProperties.SetName(control, label);
+
+        var text = new TextBlock
+        {
+            Text = label,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var row = new Grid { Margin = new Thickness(0, 3, 0, 3) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(text, 0);
+        Grid.SetColumn(control, 1);
+        row.Children.Add(text);
+        row.Children.Add(control);
+
+        return row;
+    }
+
+    /// <summary>
+    /// Whether a modifier is down right now. The key event's own modifier state is not
+    /// reliable for this: it reports the key that was pressed, not what is being held.
+    /// </summary>
+    private static bool IsHeld(VirtualKey key) =>
+        InputKeyboardSource.GetKeyStateForCurrentThread(key)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
     private static void OpenDataFolder()
     {
         try
@@ -2138,7 +2286,10 @@ public sealed partial class MainWindow : Window
             // Nothing useful to report from a convenience button.
         }
     }
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 }
+
 
 
 

@@ -17,8 +17,8 @@ namespace HomeAssistant.Desktop.Services;
 /// at which point the buttons have to be registered afresh.
 ///
 /// Clicks arrive as WM_COMMAND on the window that owns the taskbar button, so this has
-/// to see that window's messages. It subclasses rather than asking WinUI, which offers
-/// no way to observe arbitrary messages.
+/// to see that window's messages, which it gets from the shared <see cref="WindowMessages"/>
+/// hook - WinUI itself offers no way to observe arbitrary messages.
 /// </summary>
 public sealed class ThumbnailToolbar : IDisposable
 {
@@ -26,7 +26,6 @@ public sealed class ThumbnailToolbar : IDisposable
     public const int MaxButtons = 7;
 
     private const int WM_COMMAND = 0x0111;
-    private const int GWLP_WNDPROC = -4;
     private const int THBN_CLICKED = 0x1800;
 
     private const uint THB_ICON = 0x2;
@@ -41,8 +40,8 @@ public sealed class ThumbnailToolbar : IDisposable
 
     private readonly IntPtr _hwnd;
     private readonly uint _buttonCreatedMessage;
-    private readonly WndProcDelegate _subclass;
-    private readonly IntPtr _previousWndProc;
+    private readonly WindowMessages _messages;
+    private readonly WindowMessages.Handler _handler;
     private readonly List<IntPtr> _icons = [];
 
     private ITaskbarList3? _taskbar;
@@ -53,14 +52,14 @@ public sealed class ThumbnailToolbar : IDisposable
     /// <summary>Raised on the UI thread when one of the buttons is pressed.</summary>
     public event Action<JumpListSlot>? Invoked;
 
-    public ThumbnailToolbar(IntPtr hwnd)
+    public ThumbnailToolbar(IntPtr hwnd, WindowMessages messages)
     {
         _hwnd = hwnd;
+        _messages = messages;
         _buttonCreatedMessage = RegisterWindowMessage("TaskbarButtonCreated");
 
-        _subclass = SubclassProc;
-        _previousWndProc = SetWindowLongPtr(
-            _hwnd, GWLP_WNDPROC, Marshal.GetFunctionPointerForDelegate(_subclass));
+        _handler = OnMessage;
+        _messages.Add(_handler);
     }
 
     /// <summary>
@@ -151,7 +150,7 @@ public sealed class ThumbnailToolbar : IDisposable
         }
     }
 
-    private IntPtr SubclassProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam)
+    private bool OnMessage(uint msg, IntPtr wParam, IntPtr lParam)
     {
         if (msg == _buttonCreatedMessage)
         {
@@ -159,8 +158,10 @@ public sealed class ThumbnailToolbar : IDisposable
             _registered = false;
             _taskbar = null;
             Apply(update: false);
+            return false;
         }
-        else if (msg == WM_COMMAND)
+
+        if (msg == WM_COMMAND)
         {
             var code = (int)((wParam.ToInt64() >> 16) & 0xFFFF);
             var id = (int)(wParam.ToInt64() & 0xFFFF);
@@ -173,11 +174,11 @@ public sealed class ThumbnailToolbar : IDisposable
                     Invoked?.Invoke(_buttons[index]);
                 }
 
-                return IntPtr.Zero;
+                return true;
             }
         }
 
-        return CallWindowProc(_previousWndProc, hwnd, msg, wParam, lParam);
+        return false;
     }
 
     private static void DestroyAll(IEnumerable<IntPtr> icons)
@@ -199,11 +200,7 @@ public sealed class ThumbnailToolbar : IDisposable
         }
 
         _disposed = true;
-
-        if (_previousWndProc != IntPtr.Zero)
-        {
-            SetWindowLongPtr(_hwnd, GWLP_WNDPROC, _previousWndProc);
-        }
+        _messages.Remove(_handler);
 
         DestroyAll(_icons);
         _icons.Clear();
@@ -229,16 +226,8 @@ public sealed class ThumbnailToolbar : IDisposable
         public uint Flags;
     }
 
-    private delegate IntPtr WndProcDelegate(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
-
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint RegisterWindowMessage(string message);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
-    private static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
-
-    [DllImport("user32.dll", EntryPoint = "CallWindowProcW")]
-    private static extern IntPtr CallWindowProc(IntPtr prev, IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -28,6 +28,13 @@ public sealed class AppSettings
     /// </summary>
     public string? HomeUrl { get; set; }
 
+    /// <summary>
+    /// A system-wide key combination that brings the window up from anywhere. Nothing
+    /// is bound by default: taking a combination the user has not asked for would be
+    /// taking it away from whatever they already use it for.
+    /// </summary>
+    public HotkeyBinding Hotkey { get; set; } = new();
+
     /// <summary>Closing the window hides it to the notification area instead of exiting.</summary>
     public bool CloseToTray { get; set; } = true;
 
