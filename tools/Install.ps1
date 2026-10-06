@@ -69,6 +69,20 @@ $link.Description = 'Home Assistant dashboard in its own isolated browser proces
 $link.Save()
 Write-Host "Start Menu shortcut: $shortcut" -ForegroundColor Green
 
+# homeassistant:// links. Per-user, like everything else here, so no elevation is
+# needed and nothing is left behind for other accounts on the machine.
+$protocolKey = 'HKCU:\Software\Classes\homeassistant'
+New-Item -Path $protocolKey -Force | Out-Null
+Set-ItemProperty -Path $protocolKey -Name '(default)' -Value 'URL:Home Assistant'
+# Its presence is what marks the key as a protocol, whatever its value.
+Set-ItemProperty -Path $protocolKey -Name 'URL Protocol' -Value ''
+New-Item -Path "$protocolKey\DefaultIcon" -Force | Out-Null
+Set-ItemProperty -Path "$protocolKey\DefaultIcon" -Name '(default)' -Value "$installedExe,0"
+New-Item -Path "$protocolKey\shell\open\command" -Force | Out-Null
+Set-ItemProperty -Path "$protocolKey\shell\open\command" -Name '(default)' `
+    -Value "`"$installedExe`" `"%1`""
+Write-Host 'Registered homeassistant:// links.' -ForegroundColor Green
+
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 if ($StartWithWindows) {
     New-ItemProperty -Path $runKey -Name 'HomeAssistantDesktop' `

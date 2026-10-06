@@ -31,6 +31,21 @@ jobs:
         shell: pwsh
         run: ./tools/Test-Scripts.ps1
 
+  tests:
+    name: Tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # Plain net10.0 and no Windows App SDK, so this needs none of the build job's
+      # setup and runs in seconds.
+      - name: Test
+        run: dotnet test tests/HomeAssistant.Desktop.Tests/HomeAssistant.Desktop.Tests.csproj -c Release --configfile '${{ env.NUGET_CONFIG }}'
+
   build:
     name: Build
     runs-on: windows-latest

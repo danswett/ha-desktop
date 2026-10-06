@@ -37,9 +37,9 @@ public partial class App : Application
 
         var request = LaunchRequest.Parse(_args);
 
-        // A jump list entry that only acts on an entity should not drag the window up,
-        // so a launch carrying one starts hidden even if it would otherwise not.
-        if (request.Kind == LaunchRequestKind.PerformOnEntity)
+        // A launch that only acts on Home Assistant should not drag the window up, so
+        // one carrying such a request starts hidden even if it would otherwise not.
+        if (IsSilent(request))
         {
             startMinimized = true;
         }
@@ -56,8 +56,8 @@ public partial class App : Application
 
         _dispatcherQueue.TryEnqueue(() =>
         {
-            // Acting on an entity is not a reason to interrupt whatever is on screen.
-            if (request.Kind != LaunchRequestKind.PerformOnEntity)
+            // Acting on Home Assistant is not a reason to interrupt what is on screen.
+            if (!IsSilent(request))
             {
                 _window?.ShowAndFocus();
             }
@@ -65,6 +65,10 @@ public partial class App : Application
             _window?.Handle(request);
         });
     }
+
+    /// <summary>Requests that change something without needing to show anything.</summary>
+    private static bool IsSilent(LaunchRequest request) =>
+        request.Kind is LaunchRequestKind.PerformOnEntity or LaunchRequestKind.CallService;
 
     private static LaunchRequest ReadRequest(AppActivationArguments e)
     {
@@ -99,3 +103,4 @@ public partial class App : Application
         }
     }
 }
+

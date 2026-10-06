@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Input;
 using VirtualKey = Windows.System.VirtualKey;
@@ -587,8 +588,65 @@ public sealed partial class MainWindow : Window
             case LaunchRequestKind.PerformOnEntity:
                 _ = PerformOnEntityAsync(request.Target);
                 break;
+
+            case LaunchRequestKind.CallService:
+                _ = CallServiceAsync(request.Target, request.Data);
+                break;
         }
     }
+
+    /// <summary>
+    /// Runs an arbitrary service, named domain.service, with its data taken from a
+    /// query string. Like toggling, this goes straight to the REST API so that a link
+    /// works whether or not the dashboard has loaded.
+    /// </summary>
+    private async Task CallServiceAsync(string service, string? data)
+    {
+        var parts = service.Split('.');
+
+        try
+        {
+            if (await GetAccessTokenAsync(CancellationToken.None) is not { } token)
+            {
+                Log.Warn("launch", $"cannot call {service}: no credentials");
+                return;
+            }
+
+            // Everything arrives as text, so numbers and booleans are recovered here;
+            // Home Assistant rejects "50" where a service expects a number.
+            var payload = new Dictionary<string, object>();
+            var query = System.Web.HttpUtility.ParseQueryString(data ?? string.Empty);
+            foreach (var key in query.AllKeys.Where(k => !string.IsNullOrEmpty(k)))
+            {
+                payload[key!] = Scalar(query[key] ?? string.Empty);
+            }
+
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var content = new StringContent(
+                JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+
+            using var response = await http.PostAsync(
+                new Uri(new Uri(BaseUrl), $"/api/services/{parts[0]}/{parts[1]}"), content);
+
+            Log.Info("launch", $"called {service} ({(int)response.StatusCode})");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException)
+        {
+            Log.Warn("launch", $"could not call {service}: {ex.Message}");
+        }
+    }
+
+    /// <summary>A query value as the type it reads as, rather than always as text.</summary>
+    private static object Scalar(string value) => value switch
+    {
+        "true" => true,
+        "false" => false,
+        _ when long.TryParse(value, CultureInfo.InvariantCulture, out var whole) => whole,
+        _ when double.TryParse(value, CultureInfo.InvariantCulture, out var real) => real,
+        _ => value,
+    };
 
     /// <summary>
     /// Toggles an entity without involving the page, so it works whether or not the
@@ -601,7 +659,7 @@ public sealed partial class MainWindow : Window
         {
             if (await GetAccessTokenAsync(CancellationToken.None) is not { } token)
             {
-                Log.Warn("jumplist", $"cannot act on {entityId}: no credentials");
+                Log.Warn("launch", $"cannot act on {entityId}: no credentials");
                 return;
             }
 
@@ -616,11 +674,11 @@ public sealed partial class MainWindow : Window
             using var response = await http.PostAsync(
                 new Uri(new Uri(BaseUrl), "/api/services/homeassistant/toggle"), content);
 
-            Log.Info("jumplist", $"toggled {entityId} ({(int)response.StatusCode})");
+            Log.Info("launch", $"toggled {entityId} ({(int)response.StatusCode})");
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException)
         {
-            Log.Warn("jumplist", $"could not act on {entityId}: {ex.Message}");
+            Log.Warn("launch", $"could not act on {entityId}: {ex.Message}");
         }
     }
 
@@ -998,7 +1056,7 @@ public sealed partial class MainWindow : Window
 
         var answer = await QueryPageAsync(script, CancellationToken.None);
         var opened = answer is { ValueKind: JsonValueKind.True };
-        Log.Info("jumplist", opened ? $"opened {entityId}" : $"could not open {entityId}");
+        Log.Info("launch", opened ? $"opened {entityId}" : $"could not open {entityId}");
     }
 
     private void NavigateToPath(string path)
@@ -2289,6 +2347,8 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
 }
+
+
 
 
 
