@@ -400,6 +400,56 @@ lists an authenticated ADO feed that fails a non-interactive restore with 401.
 No Visual Studio or Windows SDK install is needed — the XAML compiler and SDK build tools
 both come from NuGet.
 
+## Continuous integration
+
+Two workflows, both on `windows-latest`.
+
+**CI** (`.github/workflows/ci.yml`) runs on every push to `main` and every pull request:
+
+- `tools/Test-Scripts.ps1` — parses every `.ps1`, checks every XML file is well formed,
+  and runs PSScriptAnalyzer
+- builds and publishes the app, then asserts the publish output contains the three files
+  whose absence breaks it silently: the exe, the project `.pri`, and the Insights
+  resource DLL
+
+**Release** (`.github/workflows/release.yml`) runs on a `v*` tag, builds the MSI, checks
+the tag matches the project version, and attaches the MSI to a GitHub release.
+
+Two things make a hosted runner different from a development machine, and both are
+handled explicitly rather than discovered later:
+
+- **The package feed.** `nuget.config` points at the Microsoft package proxy, which a
+  hosted runner cannot reach, while `api.nuget.org` — which it can — is blocked by
+  Defender locally. CI passes `build/nuget.ci.config` rather than weakening the local
+  one.
+- **The Windows App Runtime.** The app is self-contained and needs no runtime to *run*,
+  but it needs one to *build*, for the single file the SDK omits. A runner has none, so
+  `build/Install-WindowsAppRuntime.ps1` installs it first. `Build-Installer.ps1` refuses
+  to build without that file, so a release fails rather than shipping an MSI whose
+  toasts are silently dead.
+
+`tools/Test-Scripts.ps1` holds `bench/` to a lower bar than the rest — it must parse,
+but its empty catch blocks are deliberate: best-effort cleanup of test windows should
+never derail a measurement run.
+
+What CI does **not** cover is most of what matters here. Occlusion, lock and sleep
+behaviour, toast delivery, action buttons and the badges all need a real desktop, a real
+Home Assistant and the Windows shell. Those are verified by hand, by the methods in the
+sections above.
+
+## Releasing
+
+```powershell
+# 1. Bump <Version> in src\HomeAssistant.Desktop\HomeAssistant.Desktop.csproj
+# 2. Land that through a PR
+# 3. Tag it
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+The tag drives everything else. The workflow fails if the tag and the project version
+disagree, so the two cannot drift.
+
 ## Settings
 
 Gear icon in the title bar, or **Settings…** in the tray menu. Stored in
