@@ -418,6 +418,20 @@ glyph from tofu, since a missing codepoint still draws something; `GetGlyphIndic
 with `GGI_MARK_NONEXISTING_GLYPHS` can, and it reported one of the candidates absent
 from the shipped font.
 
+### Global hotkey
+
+A combination of your choosing brings the window up from anywhere, and puts it away
+again when it is already in front — not when it is merely open, since a summon key
+that hides the window you were looking for is a trap. Nothing is bound by default:
+taking a combination the user has not asked for takes it away from whatever they
+already use it for.
+
+The picker binds as you press, because Windows is the only authority on whether a
+combination is free — it hands each one to a single window, first come first served.
+Registering is the only way to find out, so a combination another program already
+holds is reported there and then rather than saved and silently ignored. Cancelling
+the dialog puts the previous binding back.
+
 ## Requirements
 
 - Windows 10 1903 / Windows 11
