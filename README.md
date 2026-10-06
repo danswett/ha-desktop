@@ -489,7 +489,10 @@ disagree, so the two cannot drift.
 
 ## Settings
 
-Gear icon in the title bar, or **Settings…** in the tray menu. Stored in
+**Settings…** in the tray menu, or **Companion App** in Home Assistant's own Settings
+once the app is signed in. A gear appears in the title bar only when it is not, and
+the status overlay carries its own Settings button whenever the dashboard cannot be
+reached. Stored in
 `%LOCALAPPDATA%\HomeAssistantDesktop\settings.json`, alongside the browser profile, so
 deleting that one folder resets the app completely.
 
@@ -528,12 +531,14 @@ machine, the app opens unlocked and says so in the log rather than stranding you
 
 ## Keyboard
 
-The title bar carries a single button, Settings. Back, Home, Reload and Always on
-top each had one too, and every one of them was reachable without it — the keys
-below, Home Assistant's own sidebar, and the tray menu — so a dashboard you keep
-on screen permanently is better off without the toolbar. Settings stays because on
-a fresh install it is needed before anything else works, and the tray icon may be
-sitting in the overflow.
+The title bar is bare. Settings has its own entry in the tray menu, and — once the
+app is signed in — a **Companion App** row in Home Assistant's own Settings and
+sidebar, put there by the external app bridge. A gear appears in the title bar only
+when the app is signed out, where neither of those exists.
+
+Back, Home, Reload and Always on top each had a button once, and every one of them
+was reachable without it — the keys below, Home Assistant's own sidebar, and the tray
+menu — so a dashboard you keep on screen permanently is better off without a toolbar.
 
 | Key | |
 |---|---|

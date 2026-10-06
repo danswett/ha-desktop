@@ -51,12 +51,13 @@
                         VerticalAlignment="Center"
                         Spacing="2"
                         Padding="0,0,8,0">
-                <!-- Settings alone. Back, Home, Reload and Always on top were all
-                     reachable without a button - Alt+Left and the mouse's back button,
-                     Home Assistant's own sidebar, F5, and the tray menu - and a
-                     permanently visible dashboard is better off without the toolbar.
-                     Settings stays because on a fresh install it is needed before
-                     anything works, and the tray icon may be hidden in the overflow. -->
+                <!-- Hidden once Home Assistant carries a "Companion App" row of its own,
+                     which happens whenever the app is signed in and the external bridge
+                     attaches. It stays for a signed-out app, where no such row exists and
+                     the status overlay is not showing either, so that the tray icon -
+                     which may be sitting in the notification overflow - is never the only
+                     way in. Decided once at startup rather than when the bridge answers,
+                     so the button does not appear and then vanish. -->
                 <Button x:Name="SettingsButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Settings"
                         ToolTipService.ToolTip="Settings" Click="OnSettingsClick">
                     <FontIcon Glyph="&#xE713;" FontSize="13" />
