@@ -432,6 +432,36 @@ Registering is the only way to find out, so a combination another program alread
 holds is reported there and then rather than saved and silently ignored. Cancelling
 the dialog puts the previous binding back.
 
+### `homeassistant://` links
+
+A link opens the app and takes it somewhere, using the spellings Home Assistant's own
+companion apps use, so a link written for a phone works here unchanged:
+
+| | |
+|---|---|
+| `homeassistant://navigate/energy` | Opens a page. No leading slash after the host |
+| `homeassistant://navigate/?more-info-entity-id=light.kitchen` | Opens an entity's dialog |
+| `homeassistant://call_service/light.turn_on?entity_id=light.kitchen&brightness=200` | Calls a service |
+
+Two of those are easy to get wrong from memory. There is no `more-info` host — an
+entity is a query parameter on a *root* navigate, spelled with hyphens, and the
+companion apps honour it only when no path is given. And `call_service` takes the
+domain and service as one dot-joined segment, not two path segments.
+
+A service call takes its data from the query string and goes straight to the REST API
+rather than through the page, so it works whether or not the dashboard has loaded —
+and it deliberately does not bring the window up, since changing something is no
+reason to interrupt what is on screen. Values that read as numbers or booleans are
+sent as such; Home Assistant rejects `"50"` where a service wants a number.
+
+Anything else is ignored rather than guessed at. That matters most for
+`homeassistant://auth-callback`, which Home Assistant's server reserves as the
+companion apps' OAuth redirect: a link arriving there would be carrying someone
+else's authorisation code. This app's own sign-in uses a different redirect entirely.
+
+The handler is registered per-user by the installer rather than by the app, so that
+uninstalling takes it away again and nothing needs elevation.
+
 ## Requirements
 
 - Windows 10 1903 / Windows 11

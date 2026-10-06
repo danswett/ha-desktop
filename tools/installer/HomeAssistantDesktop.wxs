@@ -40,6 +40,7 @@
       <ComponentGroupRef Id="ApplicationFiles" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="StartWithWindows" />
+      <ComponentRef Id="ProtocolHandler" />
     </Feature>
 
   </Package>
@@ -79,6 +80,29 @@
 
   <Fragment>
     <!--
+      homeassistant:// links, using the same spellings the official companion apps
+      use. Registered by the installer rather than the app so that uninstalling
+      takes it away again, and per-user so that nothing needs elevation.
+    -->
+    <Component Id="ProtocolHandler" Directory="INSTALLFOLDER">
+      <RegistryKey Root="HKCU" Key="Software\Classes\homeassistant">
+        <RegistryValue Type="string" Value="URL:Home Assistant" KeyPath="yes" />
+        <!-- Presence is what marks the key as a protocol, whatever the value. -->
+        <RegistryValue Name="URL Protocol" Type="string" Value="" />
+      </RegistryKey>
+      <RegistryValue Root="HKCU"
+                     Key="Software\Classes\homeassistant\DefaultIcon"
+                     Type="string"
+                     Value="&quot;[INSTALLFOLDER]HomeAssistant.Desktop.exe&quot;,0" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\Classes\homeassistant\shell\open\command"
+                     Type="string"
+                     Value="&quot;[INSTALLFOLDER]HomeAssistant.Desktop.exe&quot; &quot;%1&quot;" />
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <!--
       Opt-in, because an app that silently adds itself to startup is a nuisance. Pass
       STARTWITHWINDOWS=1 to msiexec, or tick the box in the app's own settings later.
       The minimized switch starts it straight into the tray.
@@ -94,3 +118,4 @@
   </Fragment>
 
 </Wix>
+
