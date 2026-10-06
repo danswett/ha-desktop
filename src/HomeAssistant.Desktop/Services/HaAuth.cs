@@ -147,6 +147,33 @@ public sealed class HaAuth
         }
     }
 
+    /// <summary>
+    /// The access token together with the seconds it has left. Home Assistant's
+    /// external auth bridge asks for both, because the frontend schedules its own
+    /// refresh from the lifetime rather than waiting to be rejected.
+    /// </summary>
+    /// <param name="force">
+    /// Set when the frontend has already been told its token is invalid, in which
+    /// case the cached one must not be handed back.
+    /// </param>
+    public async Task<(string Token, int ExpiresIn)?> GetAccessTokenWithLifetimeAsync(
+        bool force, CancellationToken token)
+    {
+        if (force)
+        {
+            _accessToken = null;
+            _accessTokenExpiry = DateTimeOffset.MinValue;
+        }
+
+        if (await GetAccessTokenAsync(token) is not { } value)
+        {
+            return null;
+        }
+
+        var remaining = (int)Math.Max(30, (_accessTokenExpiry - DateTimeOffset.UtcNow).TotalSeconds);
+        return (value, remaining);
+    }
+
     /// <summary>Revokes the refresh token at the server, then forgets it.</summary>
     public async Task SignOutAsync(CancellationToken token)
     {
