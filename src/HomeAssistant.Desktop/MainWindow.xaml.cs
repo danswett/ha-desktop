@@ -65,6 +65,19 @@ public sealed partial class MainWindow : Window
               window.chrome.webview.postMessage({ type: 'toggle-fullscreen' });
             } else if (e.key === 'Escape') {
               window.chrome.webview.postMessage({ type: 'escape' });
+            } else if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R'))) {
+              // Reload came free with the browser accelerator keys until those were
+              // turned off to take Ctrl+P, Ctrl+F and Ctrl+S with them.
+              e.preventDefault();
+              window.chrome.webview.postMessage({ type: 'reload' });
+            } else if (e.altKey && e.code === 'Space') {
+              // Alt+Space never reaches the host window: focus lives in the browser's
+              // own child window, and keyboard messages go to whatever has focus.
+              e.preventDefault();
+              window.chrome.webview.postMessage({ type: 'window-menu' });
+            } else if (e.altKey && e.key === 'ArrowLeft') {
+              e.preventDefault();
+              window.chrome.webview.postMessage({ type: 'back' });
             }
           }, true);
         })();
@@ -1300,7 +1313,6 @@ public sealed partial class MainWindow : Window
     private void ConfigureCoreWebView(CoreWebView2 core)
     {
         var s = core.Settings;
-        s.AreBrowserAcceleratorKeysEnabled = true;
         s.AreDefaultContextMenusEnabled = _settings.DevToolsEnabled;
         s.AreDevToolsEnabled = _settings.DevToolsEnabled;
         s.IsStatusBarEnabled = false;
@@ -1312,16 +1324,98 @@ public sealed partial class MainWindow : Window
         s.IsGeneralAutofillEnabled = false;
         s.IsBuiltInErrorPageEnabled = false;
         s.IsSwipeNavigationEnabled = false;
-        s.IsZoomControlEnabled = true;
+
+        // Ctrl with the mouse wheel or the plus key, and pinching a touchpad, all zoom a
+        // web page. On a dashboard they are a way to knock the layout askew by accident
+        // with no obvious way back - Home Assistant does its own scaling, and the zoom
+        // was never persisted, so it survived only until the next restart.
+        s.IsZoomControlEnabled = false;
+        s.IsPinchZoomEnabled = false;
+
+        // Ctrl+P, Ctrl+F, Ctrl+S, Ctrl+O and the rest belong to a browser. This takes
+        // reload with them, which HostKeyScript puts back.
+        s.AreBrowserAcceleratorKeysEnabled = false;
 
         core.NewWindowRequested += OnNewWindowRequested;
+        core.NavigationStarting += OnNavigationStarting;
         core.NavigationCompleted += OnNavigationCompleted;
         core.ProcessFailed += OnProcessFailed;
         core.DocumentTitleChanged += OnDocumentTitleChanged;
         core.ContainsFullScreenElementChanged += OnContainsFullScreenElementChanged;
         core.WebMessageReceived += OnWebMessageReceived;
+        core.DownloadStarting += OnDownloadStarting;
 
         InstallExternalAppBridge(core);
+    }
+
+    /// <summary>
+    /// Stops a dropped file replacing the dashboard.
+    ///
+    /// WebView2 accepts an external drop anywhere the page does not claim it, and
+    /// navigates to whatever was dropped - so a file landing on the window takes Home
+    /// Assistant off screen until it is reloaded. Refusing the navigation is narrower
+    /// than refusing the drop: Home Assistant's own upload targets, for a backup or a
+    /// media file, still work.
+    /// </summary>
+    private void OnNavigationStarting(CoreWebView2 sender, CoreWebView2NavigationStartingEventArgs e)
+    {
+        if (e.Uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            Log.Info("navigation", "refused a local file; the dashboard stays put");
+            e.Cancel = true;
+        }
+    }
+
+    /// <summary>
+    /// Takes a download out of the browser and gives it to the shell.
+    ///
+    /// Home Assistant serves real downloads - backups, camera snapshots, logs - and
+    /// each one raised Edge's download flyout, which is unmistakably a browser. The
+    /// file still lands in the Downloads folder; what changes is that it is shown in
+    /// Explorer once it arrives, the way a native app would.
+    /// </summary>
+    private void OnDownloadStarting(CoreWebView2 sender, CoreWebView2DownloadStartingEventArgs e)
+    {
+        e.Handled = true;
+
+        var download = e.DownloadOperation;
+        download.StateChanged += (_, _) =>
+        {
+            if (download.State == CoreWebView2DownloadState.Interrupted)
+            {
+                Log.Warn("download", $"a download did not finish: {download.InterruptReason}");
+                return;
+            }
+
+            if (download.State != CoreWebView2DownloadState.Completed)
+            {
+                return;
+            }
+
+            Log.Info("download", $"saved {download.ResultFilePath}");
+            RevealInExplorer(download.ResultFilePath);
+        };
+    }
+
+    private static void RevealInExplorer(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"")
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            // The file is saved either way; failing to show it is not worth more.
+            Log.Warn("download", $"could not show the file in Explorer: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -1560,6 +1654,20 @@ public sealed partial class MainWindow : Window
                 break;
             case "escape" when _appWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen:
                 SetFullScreen(false);
+                break;
+            case "reload":
+                Log.Info("input", "reloading the dashboard on request");
+                ReloadNow();
+                break;
+            case "window-menu":
+                ShowWindowMenuAtCaption();
+                break;
+            case "back":
+                if (_webView?.CoreWebView2 is { CanGoBack: true } backable)
+                {
+                    backable.GoBack();
+                }
+
                 break;
             case "theme-colour":
                 ApplyTitleBarTint(colour, text);
@@ -1876,7 +1984,41 @@ public sealed partial class MainWindow : Window
             DispatcherQueue.TryEnqueue(Exit);
         }
 
+        // Right-clicking the title bar, and Alt+Space. Both raise the window menu on an
+        // ordinary caption; a custom title bar has to do it itself.
+        if (message == WM_NCRBUTTONUP && (int)wParam == HTCAPTION)
+        {
+            // lParam already carries screen coordinates, as signed 16-bit values.
+            var packed = (int)lParam;
+            ShowWindowMenu((short)(packed & 0xFFFF), (short)((packed >> 16) & 0xFFFF));
+            return true;
+        }
+
+        if (message == WM_SYSKEYDOWN && (int)wParam == VK_SPACE)
+        {
+            ShowWindowMenuAtCaption();
+            return true;
+        }
+
         return false;
+    }
+
+    /// <summary>
+    /// Anchors the window menu under the left of the title bar, which is where Windows
+    /// puts it for Alt+Space on an ordinary caption.
+    /// </summary>
+    private void ShowWindowMenuAtCaption()
+    {
+        var position = _appWindow.Position;
+        ShowWindowMenu(position.X, position.Y + _appWindow.TitleBar.Height);
+    }
+
+    private void ShowWindowMenu(int screenX, int screenY)
+    {
+        var maximized = _appWindow.Presenter
+            is OverlappedPresenter { State: OverlappedPresenterState.Maximized };
+
+        SystemMenu.Show(_hwnd, screenX, screenY, maximized);
     }
 
     private void Exit()
