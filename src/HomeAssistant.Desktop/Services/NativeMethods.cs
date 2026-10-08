@@ -15,6 +15,26 @@ internal static partial class NativeMethods
     internal const int WM_LBUTTONDBLCLK = 0x0203;
     internal const int WM_RBUTTONUP = 0x0205;
 
+    // Right-clicking a caption, and Alt+Space. A custom title bar is client area as far
+    // as XAML is concerned, but WinUI still reports the drag region to Windows as a
+    // caption, so these arrive rather than being handled for us.
+    internal const int WM_NCRBUTTONUP = 0x00A5;
+    internal const int WM_SYSKEYDOWN = 0x0104;
+    internal const int WM_SYSCOMMAND = 0x0112;
+    internal const int HTCAPTION = 2;
+    internal const int VK_SPACE = 0x20;
+
+    internal const uint MF_BYCOMMAND = 0x00000000;
+    internal const uint MF_ENABLED = 0x00000000;
+    internal const uint MF_GRAYED = 0x00000001;
+
+    internal const uint SC_SIZE = 0xF000;
+    internal const uint SC_MOVE = 0xF010;
+    internal const uint SC_MINIMIZE = 0xF020;
+    internal const uint SC_MAXIMIZE = 0xF030;
+    internal const uint SC_CLOSE = 0xF060;
+    internal const uint SC_RESTORE = 0xF120;
+
     internal const int NIM_ADD = 0x00000000;
     internal const int NIM_MODIFY = 0x00000001;
     internal const int NIM_DELETE = 0x00000002;
@@ -40,6 +60,8 @@ internal static partial class NativeMethods
     internal const uint TPM_RIGHTBUTTON = 0x0002;
     internal const uint TPM_RETURNCMD = 0x0100;
     internal const uint TPM_NONOTIFY = 0x0080;
+    internal const uint TPM_LEFTALIGN = 0x0000;
+    internal const uint TPM_TOPALIGN = 0x0000;
 
     internal const uint MF_STRING = 0x00000000;
     internal const uint MF_SEPARATOR = 0x00000800;
@@ -215,6 +237,16 @@ internal static partial class NativeMethods
 
     [LibraryImport("user32.dll", SetLastError = true)]
     internal static partial int TrackPopupMenuEx(IntPtr hMenu, uint fuFlags, int x, int y, IntPtr hWnd, IntPtr lptpm);
+
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetSystemMenu(IntPtr hWnd, [MarshalAs(UnmanagedType.Bool)] bool bRevert);
+
+    [LibraryImport("user32.dll")]
+    internal static partial int EnableMenuItem(IntPtr hMenu, uint uIDEnableItem, uint uEnable);
+
+    [LibraryImport("user32.dll", EntryPoint = "PostMessageW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

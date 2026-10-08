@@ -757,8 +757,52 @@ menu — so a dashboard you keep on screen permanently is better off without a t
 | `F5` / `Ctrl+R` | Reload |
 | `F11` | Toggle full screen |
 | `Esc` | Leave full screen |
-| `Ctrl` + scroll | Zoom (persisted per origin by WebView2) |
 | `Alt+Left` | Back |
+| `Alt+Space` | Window menu |
+
+Every one of those is handled by the app. They used to come free from WebView2's
+browser accelerator keys, which also brought Ctrl+P, Ctrl+F, Ctrl+S and Ctrl+O with
+them — a print preview and a find bar are a browser showing through. Turning that
+setting off took reload and Back with it, so both are raised from the injected key
+handler instead and behave exactly as before.
+
+## What a browser does that this does not
+
+A WebView2 arrives with a browser's habits, and most of them are wrong for an app
+window. Beyond the context menu, status bar, autofill, password saving and Chromium
+error pages, three were worth turning off by name.
+
+**Zoom.** `Ctrl` with the wheel or the plus key, and a pinch on a touchpad, all scaled
+the page. On a dashboard that is a way to knock the layout askew by accident with no
+obvious way back — and it was never persisted, so it lasted until the next restart and
+no longer. Home Assistant does its own scaling, so nothing is lost.
+
+**A dropped file.** WebView2 accepts an external drop wherever the page does not claim
+it, and navigates to whatever was dropped: a file landing anywhere on the window took
+Home Assistant off screen until it was reloaded. Refusing the navigation is narrower
+than refusing the drop, so Home Assistant's own upload targets — a backup, a media
+file — still work.
+
+**Downloads.** Home Assistant serves real ones, and each raised Edge's download
+flyout. The file still lands in the Downloads folder; it is now shown in Explorer when
+it arrives, the way a native app would.
+
+## The window menu
+
+Right-clicking the title bar and pressing `Alt+Space` both raise the window menu —
+Restore, Move, Size, Minimize, Maximize, Close — on any ordinary window. Extending
+content into the title bar replaces the non-client area with plain XAML, and WinUI does
+not reimplement that part, so both did nothing at all.
+
+The menu shown is the real one. `GetSystemMenu` returns the window's own, so the items,
+their order, their accelerators and their localisation stay the system's rather than an
+imitation that would drift. Windows normally greys out what does not apply as it opens
+the menu, which it is not doing here, so the app sets those states itself — otherwise a
+maximized window offers to maximize again.
+
+`Alt+Space` is raised from the injected key handler rather than from `WM_SYSKEYDOWN`.
+Keyboard messages go to whatever has focus, and that is the browser's own child window,
+not this one.
 
 ## Layout
 
