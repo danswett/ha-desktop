@@ -159,7 +159,11 @@ public sealed class AppSettings
         }
     }
 
-    private void Normalize()
+    /// <summary>
+    /// Brings a freshly loaded file up to date and tidies what it holds. Internal so
+    /// the migration can be tested without going near the real settings file.
+    /// </summary>
+    internal void Normalize()
     {
         // An older file carried a single address, which was always the local one.
         if (!string.IsNullOrWhiteSpace(HomeUrl))

@@ -68,6 +68,11 @@ internal static partial class NativeMethods
     internal const uint MF_CHECKED = 0x00000008;
     internal const uint MF_UNCHECKED = 0x00000000;
 
+    internal const uint SPI_GETHIGHCONTRAST = 0x0042;
+    internal const uint HCF_HIGHCONTRASTON = 0x00000001;
+    internal const int WM_SETTINGCHANGE = 0x001A;
+    internal const int WM_THEMECHANGED = 0x031A;
+
     internal const int GWLP_WNDPROC = -4;
 
     internal const uint SWP_NOSIZE = 0x0001;
@@ -240,6 +245,19 @@ internal static partial class NativeMethods
 
     [LibraryImport("user32.dll")]
     internal static partial IntPtr GetSystemMenu(IntPtr hWnd, [MarshalAs(UnmanagedType.Bool)] bool bRevert);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct HIGHCONTRAST
+    {
+        public uint cbSize;
+        public uint dwFlags;
+        public IntPtr lpszDefaultScheme;
+    }
+
+    [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SystemParametersInfo(
+        uint uiAction, uint uiParam, ref HIGHCONTRAST pvParam, uint fWinIni);
 
     [LibraryImport("user32.dll")]
     internal static partial int EnableMenuItem(IntPtr hMenu, uint uIDEnableItem, uint uEnable);

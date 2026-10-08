@@ -14,6 +14,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\src\HomeAssistant.Desktop\Services\AppSettings.cs"
+             Link="Services\AppSettings.cs" />
+
+    <Compile Include="..\..\src\HomeAssistant.Desktop\Services\ContextMenuPolicy.cs"
+             Link="Services\ContextMenuPolicy.cs" />
+
+    <Compile Include="..\..\src\HomeAssistant.Desktop\Services\HotkeyBinding.cs"
+             Link="Services\HotkeyBinding.cs" />
+
+    <Compile Include="..\..\src\HomeAssistant.Desktop\Services\JumpListSlot.cs"
+             Link="Services\JumpListSlot.cs" />
+
     <Compile Include="..\..\src\HomeAssistant.Desktop\Services\LaunchRequest.cs"
              Link="Services\LaunchRequest.cs" />
 
@@ -25,6 +37,9 @@
 
     <Compile Include="..\..\src\HomeAssistant.Desktop\Services\TrustedOrigins.cs"
              Link="Services\TrustedOrigins.cs" />
+
+    <Compile Include="..\..\src\HomeAssistant.Desktop\Services\UnseenNotifications.cs"
+             Link="Services\UnseenNotifications.cs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -36,7 +36,8 @@
 
             <Border x:Name="DragRegion" Grid.Column="0" Background="Transparent">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0" Spacing="10">
-                    <Image x:Name="TitleBarIcon" Width="16" Height="16" />
+                    <Image x:Name="TitleBarIcon" Width="16" Height="16"
+                           AutomationProperties.AccessibilityView="Raw" />
                     <TextBlock x:Name="TitleBarText"
                                Text="Home Assistant"
                                VerticalAlignment="Center"
@@ -60,7 +61,7 @@
                      so the button does not appear and then vanish. -->
                 <Button x:Name="SettingsButton" Style="{StaticResource TitleBarButtonStyle}" AutomationProperties.Name="Settings"
                         ToolTipService.ToolTip="Settings" Click="OnSettingsClick">
-                    <FontIcon Glyph="&#xE713;" FontSize="13" />
+                    <FontIcon Glyph="&#xE713;" FontSize="13" AutomationProperties.AccessibilityView="Raw" />
                 </Button>
             </StackPanel>
         </Grid>
@@ -73,9 +74,12 @@
             <!-- Shown while connecting and whenever navigation or the browser process fails. -->
             <Grid x:Name="StatusOverlay"
                   Visibility="Collapsed"
+                  AutomationProperties.Name="Connection status"
+                  AutomationProperties.LandmarkType="Main"
                   Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16" MaxWidth="460">
                     <ProgressRing x:Name="StatusProgress" IsActive="True" Width="40" Height="40"
+                                  AutomationProperties.AccessibilityView="Raw"
                                   HorizontalAlignment="Center" />
                     <TextBlock x:Name="StatusTitle"
                                Text="Connecting&#x2026;"
@@ -102,9 +106,12 @@
                  dashboard - not even whether it connected - should be on screen. -->
             <Grid x:Name="LockOverlay"
                   Visibility="Collapsed"
+                  AutomationProperties.Name="Locked"
+                  AutomationProperties.LandmarkType="Main"
                   Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16" MaxWidth="420">
-                    <FontIcon Glyph="&#xE72E;" FontSize="38" HorizontalAlignment="Center" />
+                    <FontIcon Glyph="&#xE72E;" FontSize="38" HorizontalAlignment="Center"
+                              AutomationProperties.AccessibilityView="Raw" />
                     <TextBlock Text="Locked"
                                HorizontalAlignment="Center"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
