@@ -712,6 +712,35 @@ The setting can only be switched on after a successful verification, so turning 
 lock cannot be the thing that locks you out. If Hello is later removed from the
 machine, the app opens unlocked and says so in the log rather than stranding you.
 
+## The title bar
+
+The title bar takes its colour from the dashboard, so the window reads as one surface
+rather than a strip of Windows sitting above a strip of Home Assistant.
+
+The colour is the page's, not a guess at one. Home Assistant resolves its header
+colour into `<meta name="theme-color">` every time a theme is applied, and paints its
+own header text with `--app-header-text-color`; the app follows both. Following the
+text colour matters as much as the background: Home Assistant puts white on its light
+blue default header, where a contrast calculation would pick black and immediately
+look like a different application.
+
+A small injected script watches that meta tag and reports changes, rather than the
+external bus's `theme-update` message, for two reasons — the bus message carries no
+payload, so the colour has to be read from the page anyway, and the bus only exists
+when the app is signed in. Watching the tag covers the sign-in page too, and catches
+the automatic switch between a light and a dark theme.
+
+Whatever the theme holds is resolved through a throwaway element first, so the host
+only ever parses the `rgb()` triple the browser normalises it to rather than trying to
+understand every CSS colour syntax. Until the page reports anything — a cold start, an
+address that has not loaded — the title bar stays on the system theme, which is the
+right look for a window with nothing in it yet.
+
+Windows draws the minimise, maximise and close buttons itself, so those are coloured
+separately; their hover and pressed tints are mixed from the header colour towards the
+header's text colour, which is what keeps them visible on a light theme as well as a
+dark one.
+
 ## Keyboard
 
 The title bar is bare. Settings has its own entry in the tray menu, and — once the

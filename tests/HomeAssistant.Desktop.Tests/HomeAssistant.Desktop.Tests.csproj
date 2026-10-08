@@ -19,6 +19,9 @@
 
     <Compile Include="..\..\src\HomeAssistant.Desktop\Services\ReleaseChecker.cs"
              Link="Services\ReleaseChecker.cs" />
+
+    <Compile Include="..\..\src\HomeAssistant.Desktop\Services\ThemeTint.cs"
+             Link="Services\ThemeTint.cs" />
   </ItemGroup>
 
   <ItemGroup>
