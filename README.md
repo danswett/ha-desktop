@@ -565,6 +565,37 @@ never asks for a reboot. Uninstalling removes the app but leaves your settings.
 `STARTWITHWINDOWS=1` is optional and opt-in; you can also tick the box in the app's own
 settings later.
 
+### SmartScreen, and why the installer is not signed
+
+A browser-downloaded MSI arrives with a `Zone.Identifier` alternate data stream — the
+Mark of the Web — and that is what makes SmartScreen look the file up. Nothing is
+signed here, so the lookup finds no publisher and no reputation, and Windows offers
+only **More info → Run anyway**.
+
+Signing would not fix it. Microsoft removed EV certificates' instant SmartScreen bypass
+in 2024, so Azure Artifact Signing, OV and EV certificates now behave identically:
+warnings are expected on new files, and trust accrues only as real people download
+them. An app that exists on a handful of machines never accumulates that, so a
+certificate would buy a publisher name rather than a clean install.
+
+Two things make it a non-issue in practice.
+
+**Updates never see it.** `UpdateInstaller` fetches the MSI with `HttpClient`, and only
+browsers and the attachment manager attach the Mark of the Web — so the downloaded file
+carries none, and `msiexec` runs without a prompt. Updating through the Install button
+on the update entity is the normal path, and it is already clear.
+
+**A first install can drop the mark deliberately**, which is a statement that you know
+where the file came from:
+
+```powershell
+Unblock-File .\HomeAssistantDesktop-1.3.2-x64.msi
+msiexec /i HomeAssistantDesktop-1.3.2-x64.msi /qb
+```
+
+Downloading with `gh release download` or `Invoke-WebRequest` instead of a browser has
+the same effect, for the same reason.
+
 **Each machine registers as its own device.** The registration script names the device
 after `%COMPUTERNAME%`, so every machine gets its own `device_tracker.<machine>`,
 `notify.mobile_app_<machine>` and push channel, and Home Assistant can address them
