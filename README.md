@@ -782,6 +782,32 @@ separately; their hover and pressed tints are mixed from the header colour towar
 header's text colour, which is what keeps them visible on a light theme as well as a
 dark one.
 
+### High contrast
+
+None of this applies in a high contrast theme. High contrast exists so that a chosen
+pairing of colours is honoured everywhere, and an app that overrides it with a colour
+of its own — however carefully matched to the page behind it — takes that away. So the
+tint is dropped, the caption button colours are set back to `null`, which is what asks
+Windows for its defaults, and the title bar renders in the system scheme.
+
+It is read through `SystemParametersInfo(SPI_GETHIGHCONTRAST)` rather than
+`AccessibilitySettings`, which wants a `CoreWindow` that an unpackaged desktop app does
+not have, and re-read on `WM_SETTINGCHANGE` so turning high contrast on repaints the
+title bar immediately instead of at the next restart.
+
+Verified by measuring the title bar's dominant pixel: `rgb(28,28,28)` following the
+dashboard normally, `rgb(32,32,32)` under high contrast — which is exactly the system's
+`COLOR_WINDOW` — and back to `rgb(28,28,28)` afterwards.
+
+### Screen readers
+
+The status and lock overlays replace the dashboard without moving focus, so a screen
+reader would otherwise say nothing at all while the window stopped showing what it was
+showing. Both announce themselves through `RaiseNotificationEvent`, raised from the
+root element because a peer on a collapsed one is not reliably listened to. The lock
+overlay also takes focus, which it needs anyway: leaving focus inside the hidden
+dashboard made the only thing on screen unreachable by keyboard.
+
 ## Keyboard
 
 The title bar is bare. Settings has its own entry in the tray menu, and — once the
@@ -810,8 +836,25 @@ handler instead and behave exactly as before.
 ## What a browser does that this does not
 
 A WebView2 arrives with a browser's habits, and most of them are wrong for an app
-window. Beyond the context menu, status bar, autofill, password saving and Chromium
-error pages, three were worth turning off by name.
+window. Beyond the status bar, autofill, password saving and Chromium error pages,
+four were worth handling by name.
+
+**The context menu.** Right-clicking the dashboard used to offer Back, Reload, Save
+as, Translate, View source and the rest. Switching context menus off removes all of
+that — and takes Cut, Copy and Paste in Home Assistant's text fields with it, which no
+Windows app is allowed to do. So the browser menu stays on and is filtered instead: the
+editing commands survive, everything else is dropped, and a right-click on ordinary
+content shows nothing at all. Separators left stranded by the filtering are removed
+too, so the menu never opens with a dividing line at the top.
+
+Chromium's item names are matched rather than its labels, because the labels are
+localised. If a text field ever comes back with no editing commands this app
+recognises — which would mean those names have moved on — the whole browser menu is
+shown unfiltered and a line is written to the log. A text box with a few browser
+commands on it is a far better failure than a text box with no Paste.
+
+With developer tools enabled in Settings, the full menu is left alone; Inspect is the
+point of that switch.
 
 **Zoom.** `Ctrl` with the wheel or the plus key, and a pinch on a touchpad, all scaled
 the page. On a dashboard that is a way to knock the layout askew by accident with no

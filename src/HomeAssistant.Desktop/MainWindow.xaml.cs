@@ -13,6 +13,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -621,6 +622,10 @@ public sealed partial class MainWindow : Window
         _locked = true;
         LockDetail.Text = detail;
         LockOverlay.Visibility = Visibility.Visible;
+
+        // Focus would otherwise stay inside the now-hidden dashboard, leaving the only
+        // thing on screen unreachable by keyboard and unannounced by a screen reader.
+        UnlockButton.Focus(FocusState.Programmatic);
     }
 
     /// <summary>
@@ -658,6 +663,7 @@ public sealed partial class MainWindow : Window
 
                 default:
                     LockDetail.Text = "Not verified. Try again, or exit.";
+                    Announce("Not verified. Try again, or exit.");
                     break;
             }
         }
@@ -1333,7 +1339,11 @@ public sealed partial class MainWindow : Window
     private void ConfigureCoreWebView(CoreWebView2 core)
     {
         var s = core.Settings;
-        s.AreDefaultContextMenusEnabled = _settings.DevToolsEnabled;
+
+        // Left on so the ContextMenuRequested handler below can run - it does not fire
+        // at all when this is false, and switching it off would take Cut, Copy and
+        // Paste away from every text field in Home Assistant.
+        s.AreDefaultContextMenusEnabled = true;
         s.AreDevToolsEnabled = _settings.DevToolsEnabled;
         s.IsStatusBarEnabled = false;
 
@@ -1364,8 +1374,72 @@ public sealed partial class MainWindow : Window
         core.ContainsFullScreenElementChanged += OnContainsFullScreenElementChanged;
         core.WebMessageReceived += OnWebMessageReceived;
         core.DownloadStarting += OnDownloadStarting;
+        core.ContextMenuRequested += OnContextMenuRequested;
 
         InstallExternalAppBridge(core);
+    }
+
+    /// <summary>
+    /// Trims Chromium's context menu down to the commands a desktop app should offer.
+    ///
+    /// Switching context menus off entirely would be simpler, but it would also take
+    /// Cut, Copy and Paste away from every text field in Home Assistant - a search box,
+    /// a template editor, an automation's YAML - which is not something a Windows app
+    /// is allowed to do. So the menu is kept and filtered instead, leaving the editing
+    /// commands and dropping "Open link in new tab", "Save page as", "Translate" and
+    /// the other things that only make sense in a browser.
+    /// </summary>
+    private void OnContextMenuRequested(
+        CoreWebView2 sender, CoreWebView2ContextMenuRequestedEventArgs e)
+    {
+        // With developer tools turned on, the full browser menu - Inspect included - is
+        // the whole point, so it is left alone.
+        if (_settings.DevToolsEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            var entries = e.MenuItems
+                .Select(m => new ContextMenuEntry(
+                    m.Name, m.Kind == CoreWebView2ContextMenuItemKind.Separator))
+                .ToList();
+
+            var (outcome, keep) = ContextMenuPolicy.Decide(
+                entries, e.ContextMenuTarget.IsEditable);
+
+            if (outcome == ContextMenuOutcome.ShowEverything)
+            {
+                Log.Warn(
+                    "context-menu",
+                    "a text field offered no editing commands this app recognises; "
+                    + $"showing the browser menu instead: {string.Join(", ", entries.Select(x => x.Name))}");
+                return;
+            }
+
+            if (outcome == ContextMenuOutcome.Suppress)
+            {
+                // Right-clicking the dashboard itself: a native app shows nothing here
+                // rather than a menu of browser commands.
+                e.Handled = true;
+                return;
+            }
+
+            var kept = keep.ToHashSet();
+            for (var i = entries.Count - 1; i >= 0; i--)
+            {
+                if (!kept.Contains(i))
+                {
+                    e.MenuItems.RemoveAt(i);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // A menu that fails to filter should not be a menu that fails to appear.
+            Log.Warn("context-menu", $"could not filter the menu: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -1746,8 +1820,26 @@ public sealed partial class MainWindow : Window
 
     private void PaintTitleBar()
     {
-        if (_titleBarTint is not { } tint || _titleBarForeground is not { } text)
+        var titleBar = _appWindow.TitleBar;
+
+        // High contrast is a promise that colours mean what the user chose. Keeping the
+        // dashboard's tint here would break that promise on the one surface this app
+        // paints itself.
+        if (_titleBarTint is not { } tint || _titleBarForeground is not { } text
+            || SystemAccessibility.IsHighContrast())
         {
+            AppTitleBar.Background = null;
+            TitleBarText.ClearValue(TextBlock.ForegroundProperty);
+            SettingsButton.ClearValue(Control.ForegroundProperty);
+
+            titleBar.ButtonBackgroundColor = Colors.Transparent;
+            titleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
+            titleBar.ButtonForegroundColor = null;
+            titleBar.ButtonHoverBackgroundColor = null;
+            titleBar.ButtonHoverForegroundColor = null;
+            titleBar.ButtonPressedBackgroundColor = null;
+            titleBar.ButtonPressedForegroundColor = null;
+            titleBar.ButtonInactiveForegroundColor = null;
             return;
         }
 
@@ -1760,7 +1852,6 @@ public sealed partial class MainWindow : Window
 
         // The caption buttons are drawn by Windows, not by the XAML above, so they are
         // coloured separately or they stay the system grey over a themed strip.
-        var titleBar = _appWindow.TitleBar;
         titleBar.ButtonBackgroundColor = background;
         titleBar.ButtonInactiveBackgroundColor = background;
         titleBar.ButtonForegroundColor = foreground;
@@ -2024,6 +2115,14 @@ public sealed partial class MainWindow : Window
             DispatcherQueue.TryEnqueue(Exit);
         }
 
+        // Turning high contrast on or off has to repaint the title bar, which is the
+        // one surface this app colours itself.
+        if (message is WM_SETTINGCHANGE or WM_THEMECHANGED)
+        {
+            DispatcherQueue.TryEnqueue(PaintTitleBar);
+            return false;
+        }
+
         // Right-clicking the title bar, and Alt+Space. Both raise the window menu on an
         // ordinary caption; a custom title bar has to do it itself.
         if (message == WM_NCRBUTTONUP && (int)wParam == HTCAPTION)
@@ -2078,12 +2177,49 @@ public sealed partial class MainWindow : Window
         StatusProgress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         StatusActions.Visibility = showActions ? Visibility.Visible : Visibility.Collapsed;
         StatusOverlay.Visibility = Visibility.Visible;
+
+        // The overlay replaces the dashboard rather than moving focus, so without this
+        // a screen reader user is left on a window that has silently stopped showing
+        // what it was showing.
+        Announce($"{title}. {detail}");
+    }
+
+    /// <summary>
+    /// Says something to a screen reader without moving focus or putting it on screen
+    /// twice. Nothing happens when no assistive technology is listening.
+    /// </summary>
+    private void Announce(string message)
+    {
+        try
+        {
+            // Raised from the root, which is always visible: a peer on a collapsed
+            // element is not reliably listened to, and the lock overlay hides the
+            // status one.
+            var peer = FrameworkElementAutomationPeer.FromElement(RootGrid)
+                ?? FrameworkElementAutomationPeer.CreatePeerForElement(RootGrid);
+
+            peer?.RaiseNotificationEvent(
+                AutomationNotificationKind.Other,
+                AutomationNotificationProcessing.MostRecent,
+                message,
+                "haDesktopStatus");
+        }
+        catch (Exception ex)
+        {
+            // An announcement is never worth an exception reaching the UI thread.
+            Log.Warn("a11y", $"could not announce a status change: {ex.Message}");
+        }
     }
 
     private void HideStatus()
     {
         StatusProgress.IsActive = false;
         StatusOverlay.Visibility = Visibility.Collapsed;
+
+        if (!_locked)
+        {
+            Announce("Connected. The dashboard is showing.");
+        }
     }
 
     // ---- commands ----------------------------------------------------------
@@ -2454,6 +2590,7 @@ public sealed partial class MainWindow : Window
                 Text = hotkey.ToString(),
                 PlaceholderText = "Click here, then press the keys",
             };
+            AutomationProperties.SetName(hotkeyBox, "Global hotkey");
 
             var hotkeyStatus = new InfoBar
             {
@@ -2626,7 +2763,6 @@ public sealed partial class MainWindow : Window
             if (devToolsChanged && _webView?.CoreWebView2 is { } core)
             {
                 core.Settings.AreDevToolsEnabled = _settings.DevToolsEnabled;
-                core.Settings.AreDefaultContextMenusEnabled = _settings.DevToolsEnabled;
             }
 
             var addressesChanged =
