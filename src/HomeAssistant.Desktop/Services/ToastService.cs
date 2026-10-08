@@ -26,6 +26,13 @@ public sealed class ToastService : IDisposable
     /// </summary>
     private const string ClearMessage = "clear_notification";
 
+    /// <summary>
+    /// What Windows labels the toast with. Registering without it leaves the platform to
+    /// derive a name from the executable, and it does that by truncating at the first dot:
+    /// HomeAssistant.Desktop.exe becomes "HomeAssistant".
+    /// </summary>
+    private const string DisplayName = "Home Assistant";
+
     private readonly Func<CancellationToken, Task<string?>> _tokenProvider;
     private readonly Func<string> _baseUrlProvider;
     private readonly Action<string> _onNavigate;
@@ -57,7 +64,20 @@ public sealed class ToastService : IDisposable
         {
             var manager = AppNotificationManager.Default;
             manager.NotificationInvoked += OnNotificationInvoked;
-            manager.Register();
+
+            // The icon has to come with the name: there is no overload that sets one
+            // without the other, and the platform rejects a path that is not there.
+            var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
+            if (File.Exists(icon))
+            {
+                manager.Register(DisplayName, new Uri(icon));
+            }
+            else
+            {
+                Log.Warn("toasts", $"no icon at {icon}; toasts will be labelled by executable name");
+                manager.Register();
+            }
+
             _registered = true;
             Log.Info("toasts", "registered with the Windows notification platform");
             return true;

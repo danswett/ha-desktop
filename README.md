@@ -296,6 +296,17 @@ Whether the dashboard is "on screen" is asked live rather than tracked from WinU
 no deactivation, so a cached flag stays stuck on "active" and nothing is ever counted.
 The same predicate decides both counting and clearing, so the two cannot disagree.
 
+### What Windows calls the app
+
+An unpackaged app has no manifest to read a name out of, so `AppNotificationManager`
+invents one: it takes the executable's file name and truncates it at the first dot.
+`HomeAssistant.Desktop.exe` therefore labelled every toast "HomeAssistant", with no
+space. The `Register(displayName, iconUri)` overload sets both explicitly, and the name
+and icon have to be supplied together — there is no overload for one without the other,
+and the platform rejects an icon path that does not exist. Registration falls back to
+the parameterless form if `Assets\app.ico` is missing, since a badly labelled toast
+still beats no toast at all.
+
 ### Three ways this fails silently
 
 Each of these was hit, and none of them reports anything on its own.
