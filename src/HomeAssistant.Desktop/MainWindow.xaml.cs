@@ -14,6 +14,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.Web.WebView2.Core;
 using WinRT.Interop;
@@ -69,6 +70,85 @@ public sealed partial class MainWindow : Window
         })();
         """;
 
+    /// <summary>
+    /// Reports the colour Home Assistant is painting its header with, so the title bar
+    /// can match it.
+    ///
+    /// Home Assistant writes that colour into its theme-color meta tag every time a
+    /// theme is applied, which is also the only announcement it makes - the external
+    /// bus theme-update message carries no payload, and arrives only when the app is
+    /// signed in. Watching the tag instead works signed out too, and catches the
+    /// automatic switch between a light and a dark theme.
+    ///
+    /// The value is resolved through a throwaway element first. A theme may hold any
+    /// CSS colour syntax, and letting the browser normalise it to an rgb() triple is
+    /// far more robust than teaching the host every form of it.
+    /// </summary>
+    private const string ThemeColourScript = """
+        (function () {
+          if (window.top !== window) { return; }
+          if (window.__haDesktopTheme) { return; }
+          window.__haDesktopTheme = true;
+
+          var probe = document.createElement('span');
+          probe.style.display = 'none';
+
+          var resolve = function (value) {
+            if (!value) { return ''; }
+            probe.style.backgroundColor = '';
+            probe.style.backgroundColor = value;
+            if (!probe.style.backgroundColor) { return ''; }
+            var host = document.body || document.documentElement;
+            if (!host) { return ''; }
+            host.appendChild(probe);
+            var resolved = getComputedStyle(probe).backgroundColor;
+            probe.remove();
+            return resolved;
+          };
+
+          var last = null;
+          var report = function () {
+            var meta = document.querySelector('meta[name=theme-color]');
+            var colour = resolve(meta ? meta.getAttribute('content') : '')
+              || resolve(document.documentElement.style.backgroundColor);
+            if (!colour) { return; }
+
+            // Home Assistant paints its own header text with this, so following it is
+            // what makes the two strips look like one. White on its light blue is the
+            // obvious case: a contrast calculation would pick black and stand out.
+            var text = resolve(
+              getComputedStyle(document.documentElement)
+                .getPropertyValue('--app-header-text-color'));
+
+            var next = colour + '|' + text;
+            if (next === last) { return; }
+            last = next;
+            window.chrome.webview.postMessage(
+              { type: 'theme-colour', colour: colour, text: text });
+          };
+
+          var start = function () {
+            report();
+            // The theme lands after the first paint, and again whenever the user picks
+            // a different one, so this has to keep watching rather than read once.
+            new MutationObserver(report).observe(document.documentElement, {
+              attributes: true, attributeFilter: ['style'],
+            });
+            if (document.head) {
+              new MutationObserver(report).observe(document.head, {
+                attributes: true, attributeFilter: ['content'], childList: true, subtree: true,
+              });
+            }
+          };
+
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', start);
+          } else {
+            start();
+          }
+        })();
+        """;
+
     private static readonly int[] RetryDelaysSeconds = [2, 5, 10, 20, 30, 60];
 
     private readonly AppSettings _settings;
@@ -119,6 +199,20 @@ public sealed partial class MainWindow : Window
     private bool _suppressMinimizeToTray;
     private bool _settingsDialogOpen;
     private string _documentTitle = "Home Assistant";
+
+    /// <summary>
+    /// The dashboard's header colour, once the page has reported one. Null until then,
+    /// which leaves the title bar on the system theme - the right look for a window
+    /// that has nothing loaded in it yet.
+    /// </summary>
+    private Rgb? _titleBarTint;
+
+    /// <summary>
+    /// The dashboard's own header text colour, which is preferred over a calculated
+    /// one: Home Assistant puts white on its light blue header, and a contrast
+    /// calculation would pick black and look like a different application.
+    /// </summary>
+    private Rgb? _titleBarForeground;
 
     public MainWindow(AppSettings settings, bool startMinimized)
     {
@@ -731,6 +825,10 @@ public sealed partial class MainWindow : Window
         titleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
 
         UpdateTitleBarInsets();
+
+        // Leaving full screen comes back through here, which has just reset the caption
+        // button colours to the system defaults.
+        PaintTitleBar();
     }
 
     private void UpdateTitleBarInsets()
@@ -832,6 +930,7 @@ public sealed partial class MainWindow : Window
         var core = webView.CoreWebView2;
         ConfigureCoreWebView(core);
         await core.AddScriptToExecuteOnDocumentCreatedAsync(HostKeyScript);
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(ThemeColourScript);
 
         if (string.IsNullOrWhiteSpace(_settings.InternalUrl) && string.IsNullOrWhiteSpace(_settings.ExternalUrl))
         {
@@ -1423,6 +1522,8 @@ public sealed partial class MainWindow : Window
     private void OnWebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         string? type;
+        string? colour = null;
+        string? text = null;
         try
         {
             using var document = JsonDocument.Parse(e.WebMessageAsJson);
@@ -1437,6 +1538,15 @@ public sealed partial class MainWindow : Window
             }
 
             type = document.RootElement.TryGetProperty("type", out var value) ? value.GetString() : null;
+            if (document.RootElement.TryGetProperty("colour", out var tint))
+            {
+                colour = tint.GetString();
+            }
+
+            if (document.RootElement.TryGetProperty("text", out var textValue))
+            {
+                text = textValue.GetString();
+            }
         }
         catch (JsonException)
         {
@@ -1451,8 +1561,72 @@ public sealed partial class MainWindow : Window
             case "escape" when _appWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen:
                 SetFullScreen(false);
                 break;
+            case "theme-colour":
+                ApplyTitleBarTint(colour, text);
+                break;
         }
     }
+
+    /// <summary>
+    /// Adopts the dashboard's header colours, so the title bar reads as the top of the
+    /// page rather than as a separate strip of Windows above it.
+    /// </summary>
+    private void ApplyTitleBarTint(string? colour, string? text)
+    {
+        if (!ThemeTint.TryParse(colour, out var tint))
+        {
+            Log.Info("titlebar", $"ignoring an unusable theme colour: {colour ?? "none"}");
+            return;
+        }
+
+        // The theme's own header text colour where it has one, and a readable choice
+        // where it does not.
+        var foreground = ThemeTint.TryParse(text, out var themed)
+            ? themed
+            : ThemeTint.Contrasting(tint);
+
+        if (_titleBarTint == tint && _titleBarForeground == foreground)
+        {
+            return;
+        }
+
+        _titleBarTint = tint;
+        _titleBarForeground = foreground;
+        Log.Info("titlebar", $"matching the dashboard header (#{tint.R:X2}{tint.G:X2}{tint.B:X2})");
+        PaintTitleBar();
+    }
+
+    private void PaintTitleBar()
+    {
+        if (_titleBarTint is not { } tint || _titleBarForeground is not { } text)
+        {
+            return;
+        }
+
+        var background = ToColor(tint);
+        var foreground = ToColor(text);
+
+        AppTitleBar.Background = new SolidColorBrush(background);
+        TitleBarText.Foreground = new SolidColorBrush(foreground);
+        SettingsButton.Foreground = new SolidColorBrush(foreground);
+
+        // The caption buttons are drawn by Windows, not by the XAML above, so they are
+        // coloured separately or they stay the system grey over a themed strip.
+        var titleBar = _appWindow.TitleBar;
+        titleBar.ButtonBackgroundColor = background;
+        titleBar.ButtonInactiveBackgroundColor = background;
+        titleBar.ButtonForegroundColor = foreground;
+        titleBar.ButtonHoverBackgroundColor = ToColor(ThemeTint.Blend(tint, text, 0.12));
+        titleBar.ButtonHoverForegroundColor = foreground;
+        titleBar.ButtonPressedBackgroundColor = ToColor(ThemeTint.Blend(tint, text, 0.22));
+        titleBar.ButtonPressedForegroundColor = foreground;
+
+        // An inactive window should still look like itself, only quieter.
+        titleBar.ButtonInactiveForegroundColor = ToColor(ThemeTint.Blend(tint, text, 0.45));
+    }
+
+    private static Windows.UI.Color ToColor(Rgb colour) =>
+        Windows.UI.Color.FromArgb(255, colour.R, colour.G, colour.B);
 
     private void SetFullScreen(bool fullScreen)
     {
