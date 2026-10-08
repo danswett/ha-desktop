@@ -29,6 +29,16 @@ namespace HomeAssistant.Desktop.Services;
 public sealed class ExternalAppBridge
 {
     /// <summary>
+    /// The only two callback names the frontend uses (src/data/external_auth.ts). They
+    /// are interpolated into a statement that is then run in the page, so an unexpected
+    /// one is refused rather than echoed: a value like <c>x(0);alert(1)//</c> would
+    /// otherwise be script of the sender's choosing, run in whatever document happens
+    /// to be loaded by the time the token comes back.
+    /// </summary>
+    private static readonly string[] KnownCallbacks =
+        ["externalAuthSetToken", "externalAuthRevokeToken"];
+
+    /// <summary>
     /// Defines window.externalApp before any page script runs, and forwards each call
     /// to the host. Confined to the top-level document: Home Assistant hosts add-on
     /// UIs in iframes, and they have no business claiming to be the companion app.
@@ -51,17 +61,20 @@ public sealed class ExternalAppBridge
     private readonly Func<CancellationToken, Task> _revoke;
     private readonly Action _showSettings;
     private readonly Func<string, Task> _runScript;
+    private readonly Func<string?, bool> _isTrustedOrigin;
 
     public ExternalAppBridge(
         Func<bool, CancellationToken, Task<(string Token, int ExpiresIn)?>> tokenProvider,
         Func<CancellationToken, Task> revoke,
         Action showSettings,
-        Func<string, Task> runScript)
+        Func<string, Task> runScript,
+        Func<string?, bool> isTrustedOrigin)
     {
         _tokenProvider = tokenProvider;
         _revoke = revoke;
         _showSettings = showSettings;
         _runScript = runScript;
+        _isTrustedOrigin = isTrustedOrigin;
     }
 
     public static Task InstallAsync(CoreWebView2 core) =>
@@ -71,11 +84,25 @@ public sealed class ExternalAppBridge
     /// Handles one message from the injected script. Returns false if it was not ours,
     /// so the caller can go on to its own messages.
     /// </summary>
-    public bool TryHandle(JsonElement root)
+    /// <param name="source">
+    /// The address of the document that sent it. The injected script runs in every
+    /// top-level document the browser loads, not only Home Assistant's, and this class
+    /// hands out real access tokens - so who is asking has to be established here
+    /// rather than assumed from the fact that the message arrived at all.
+    /// </param>
+    public bool TryHandle(JsonElement root, string? source)
     {
         if (!root.TryGetProperty("type", out var type) || type.GetString() != "ha-bridge")
         {
             return false;
+        }
+
+        if (!_isTrustedOrigin(source))
+        {
+            // Claimed and swallowed rather than passed on: it is addressed to this
+            // bridge, and the answer is no.
+            Log.Warn("bridge", $"refused a companion app request from {Describe(source)}");
+            return true;
         }
 
         var kind = root.TryGetProperty("kind", out var k) ? k.GetString() : null;
@@ -97,12 +124,40 @@ public sealed class ExternalAppBridge
         }
     }
 
+    private static string Describe(string? source) =>
+        Uri.TryCreate(source, UriKind.Absolute, out var uri) ? uri.GetLeftPart(UriPartial.Authority) : "an unknown page";
+
+    /// <summary>
+    /// Picks the callback to answer on, refusing any name the frontend would not have
+    /// sent. Returns null when there is nothing safe to call.
+    /// </summary>
+    private static string? ResolveCallback(string? requested, string fallback)
+    {
+        if (string.IsNullOrEmpty(requested))
+        {
+            return fallback;
+        }
+
+        if (KnownCallbacks.Contains(requested, StringComparer.Ordinal))
+        {
+            return requested;
+        }
+
+        Log.Warn("bridge", "refused a reply callback the frontend would not have asked for");
+        return null;
+    }
+
     private async Task SupplyTokenAsync(string? payload)
     {
         // { "callback": "externalAuthSetToken", "force": true }. The callback name is
         // taken from the message rather than assumed: the frontend's own comment calls
         // these constants a contract, and reading it back is free.
-        var callback = ReadString(payload, "callback") ?? "externalAuthSetToken";
+        var callback = ResolveCallback(ReadString(payload, "callback"), "externalAuthSetToken");
+        if (callback is null)
+        {
+            return;
+        }
+
         var force = ReadBool(payload, "force");
 
         try
@@ -131,7 +186,11 @@ public sealed class ExternalAppBridge
 
     private async Task RevokeAsync(string? payload)
     {
-        var callback = ReadString(payload, "callback") ?? "externalAuthRevokeToken";
+        var callback = ResolveCallback(ReadString(payload, "callback"), "externalAuthRevokeToken");
+        if (callback is null)
+        {
+            return;
+        }
 
         try
         {

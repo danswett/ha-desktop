@@ -22,6 +22,9 @@
 
     <Compile Include="..\..\src\HomeAssistant.Desktop\Services\ThemeTint.cs"
              Link="Services\ThemeTint.cs" />
+
+    <Compile Include="..\..\src\HomeAssistant.Desktop\Services\TrustedOrigins.cs"
+             Link="Services\TrustedOrigins.cs" />
   </ItemGroup>
 
   <ItemGroup>

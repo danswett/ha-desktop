@@ -379,6 +379,47 @@ Two details are load-bearing:
 Only `hasSettingsScreen` is advertised. The frontend asks follow-up questions only
 about capabilities the app claims, so the list is kept honest rather than aspirational.
 
+### Which pages count as Home Assistant
+
+The bridge hands out real Home Assistant access tokens, so the question of who is
+asking has to be answered rather than assumed. It had been assumed, and that was wrong
+in two ways that a notification could reach.
+
+The injected script runs in **every** top-level document the browser loads, not only
+Home Assistant's — that is simply what `AddScriptToExecuteOnDocumentCreatedAsync` does.
+Nothing checked where a request came from before answering it with a token, so any page
+the window could be made to visit could ask for one and get it. `NavigateToPath` was how
+you made it visit one: it resolved with `Uri.TryCreate(base, target)`, which returns the
+target whenever the target is absolute, so a notification carrying
+`navigate_to: "https://example.test/"` moved the window there on a click.
+
+Worse, and needing no click at all, a notification also names the address its picture
+comes from. That address was used exactly as given and the bearer token was attached to
+the request, so a notification could name any host and be sent a live token the moment
+it arrived — before the toast was even on screen, and whether or not the app had signed
+in, since the token provider falls back to borrowing the dashboard's.
+
+`TrustedOrigins` now answers the question in one place, and origin means what the web
+means by it: scheme, host and port, all three. Both configured addresses count, because
+a laptop that left the house is on the external one and is no less itself for it.
+
+- A notification's picture is still fetched if it lives elsewhere, as it is on the
+  phones — but off Home Assistant it is fetched without credentials.
+- A link that resolves off Home Assistant is opened in the browser rather than in this
+  window, which is what already happened to links asking for a window of their own.
+- Top-level navigation away from Home Assistant is refused and handed to the browser.
+- The bridge checks the sending document before answering anything, so even a page that
+  arrives some other way is refused.
+- The reply callback must be one of the two names the frontend actually uses. It is
+  interpolated into a statement that is then run in the page, and the reply is not
+  delivered to the document that asked — a token round trip can outlast a navigation —
+  so an unexpected name is refused rather than echoed.
+
+That last point is the reason the origin check lives in the bridge rather than only in
+the navigation guard: the guard is about where the window goes, and the bridge is about
+who it talks to. They are not the same question, and only the second one protects a
+token.
+
 ### Taskbar jump list
 
 Right-clicking the app on the taskbar can carry up to ten entries of your own, each
