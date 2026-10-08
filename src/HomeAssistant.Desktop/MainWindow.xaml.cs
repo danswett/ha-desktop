@@ -204,6 +204,14 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private string BaseUrl => _endpoints?.Current ?? string.Empty;
 
+    /// <summary>
+    /// Every address that counts as Home Assistant. A machine that moves between
+    /// networks has two configured, and the one currently in use may be either.
+    /// </summary>
+    private IEnumerable<string?> TrustedBases => [BaseUrl, _settings.InternalUrl, _settings.ExternalUrl];
+
+    private bool IsTrustedOrigin(string? uri) => TrustedOrigins.IsTrusted(uri, TrustedBases);
+
     // Two independent reasons to stop painting. Rendering requires both.
     private bool _windowVisible = true;
     private bool _userPresent = true;
@@ -989,7 +997,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        _toasts = new ToastService(GetAccessTokenAsync, () => BaseUrl, NavigateToPath);
+        _toasts = new ToastService(GetAccessTokenAsync, () => BaseUrl, NavigateToPath, IsTrustedOrigin);
         if (!_toasts.TryInitialize())
         {
             _toasts = null;
@@ -1201,9 +1209,21 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            if (Uri.TryCreate(new Uri(BaseUrl), path, out var target))
+            if (TrustedOrigins.ResolveWithin(path, BaseUrl, TrustedBases) is { } target)
             {
                 Navigate(target.ToString());
+                return;
+            }
+
+            // The path may have come from a notification, and an absolute one resolves
+            // to itself - so this is where a notification could otherwise move the
+            // dashboard window onto a site of its choosing, taking the companion app
+            // bridge, and the tokens it hands out, along with it. Somewhere else is
+            // still worth opening; it is just not worth opening here.
+            Log.Warn("navigation", "refused a link pointing outside Home Assistant; opening it in the browser instead");
+            if (Uri.TryCreate(new Uri(BaseUrl), path, out var outside))
+            {
+                OpenExternally(outside.ToString());
             }
         });
     }
@@ -1363,7 +1383,26 @@ public sealed partial class MainWindow : Window
         {
             Log.Info("navigation", "refused a local file; the dashboard stays put");
             e.Cancel = true;
+            return;
         }
+
+        // Defence in depth behind the bridge's own check on who is asking. This window
+        // is the one with the companion app bridge in it, so it stays on Home
+        // Assistant; anywhere else belongs in a browser, which is what the same app
+        // already does with links that ask for a window of their own.
+        var isWeb = e.Uri.StartsWith("http:", StringComparison.OrdinalIgnoreCase)
+            || e.Uri.StartsWith("https:", StringComparison.OrdinalIgnoreCase);
+
+        // Nothing is trusted before an address is configured, and policing navigation
+        // then would stop the dashboard ever loading.
+        if (!isWeb || !TrustedOrigins.AnyConfigured(TrustedBases) || IsTrustedOrigin(e.Uri))
+        {
+            return;
+        }
+
+        Log.Warn("navigation", "sent an off-site link to the browser rather than opening it in the dashboard");
+        e.Cancel = true;
+        OpenExternally(e.Uri);
     }
 
     /// <summary>
@@ -1466,7 +1505,8 @@ public sealed partial class MainWindow : Window
                 }
 
                 await completion.Task;
-            });
+            },
+            isTrustedOrigin: IsTrustedOrigin);
 
         _ = ExternalAppBridge.InstallAsync(core);
         Log.Info("bridge", "external app bridge attached; the app is supplying the dashboard's tokens");
@@ -1626,7 +1666,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            if (_bridge?.TryHandle(document.RootElement) == true)
+            if (_bridge?.TryHandle(document.RootElement, e.Source) == true)
             {
                 return;
             }

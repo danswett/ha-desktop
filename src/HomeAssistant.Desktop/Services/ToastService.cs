@@ -36,6 +36,7 @@ public sealed class ToastService : IDisposable
     private readonly Func<CancellationToken, Task<string?>> _tokenProvider;
     private readonly Func<string> _baseUrlProvider;
     private readonly Action<string> _onNavigate;
+    private readonly Func<string?, bool> _isTrustedOrigin;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
 
     private bool _registered;
@@ -52,11 +53,13 @@ public sealed class ToastService : IDisposable
     public ToastService(
         Func<CancellationToken, Task<string?>> tokenProvider,
         Func<string> baseUrlProvider,
-        Action<string> onNavigate)
+        Action<string> onNavigate,
+        Func<string?, bool> isTrustedOrigin)
     {
         _tokenProvider = tokenProvider;
         _baseUrlProvider = baseUrlProvider;
         _onNavigate = onNavigate;
+        _isTrustedOrigin = isTrustedOrigin;
     }
 
     public bool TryInitialize()    {
@@ -274,10 +277,22 @@ public sealed class ToastService : IDisposable
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
 
-            var token = await _tokenProvider(cts.Token);
-            if (!string.IsNullOrEmpty(token))
+            // The address came out of the notification, and a notification is not a
+            // trusted thing: anything able to send one could otherwise name its own
+            // host here and be handed a live Home Assistant token, without the user
+            // seeing the toast, let alone touching it. Off-origin pictures still load,
+            // as they do on the phones - they just load as a stranger.
+            if (_isTrustedOrigin(uri.ToString()))
             {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                var token = await _tokenProvider(cts.Token);
+                if (!string.IsNullOrEmpty(token))
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                }
+            }
+            else
+            {
+                Log.Warn("toasts", $"fetching a picture from {uri.Host} without credentials; it is not Home Assistant");
             }
 
             using var response = await _http.SendAsync(request, cts.Token);
